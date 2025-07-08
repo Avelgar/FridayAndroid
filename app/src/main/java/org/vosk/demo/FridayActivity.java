@@ -63,6 +63,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.util.ArrayList;
 import java.util.List;
 
 import androidx.annotation.NonNull;
@@ -327,7 +328,7 @@ public class FridayActivity extends Activity implements
             try {
                 JSONObject jsonMessage = new JSONObject(encodedMessage);
 
-                if (jsonMessage.has("type") && jsonMessage.getString("type").equals("command_execution")) {
+                if ("new_message".equals(jsonMessage.optString("type"))) {
                     // Обработка команды выполнения
 
                     try {
@@ -405,7 +406,7 @@ public class FridayActivity extends Activity implements
 
                         // Сохраняем историю и логин для последующего использования
                         if (jsonData.has("history")) {
-                            pendingHistory = jsonData.getString("history");
+                            pendingHistory = jsonData.getJSONArray("history").toString();
                         }
                         if (jsonData.has("user_login")) {
                             pendingUserLogin = jsonData.getString("user_login");
@@ -524,69 +525,52 @@ public class FridayActivity extends Activity implements
         }
     }
 
-    private void displayHistory(String history) {
-        if (resultView == null || history == null || history.trim().isEmpty()) {
+    private void displayHistory(String historyJson) {
+        if (resultView == null || historyJson == null || historyJson.trim().isEmpty()) {
             return;
         }
 
         try {
+            JSONArray historyArray = new JSONArray(historyJson);
             StringBuilder formattedHistory = new StringBuilder();
-            String[] lines = history.split("\n");
 
-            for (String line : lines) {
-                if (line.trim().isEmpty()) continue;
+            for (int i = 0; i < historyArray.length(); i++) {
+                JSONObject message = historyArray.getJSONObject(i);
+                String sender = message.optString("sender", "");
+                String text = message.optString("text", "");
 
-                // Определяем тип сообщения по префиксу
-                if (line.startsWith("Вы (")) {
-                    int start = line.indexOf("): ") + 3;
-                    if (start >= 3) {
-                        String command = line.substring(start);
-                        formattedHistory.append("Вы: ").append(command).append("\n");
-                    }
+                if (sender.isEmpty() || text.isEmpty()) {
+                    continue;
                 }
-                else if (line.startsWith("Бот (")) {
-                    int start = line.indexOf("): ") + 3;
-                    if (start >= 3) {
-                        String response = line.substring(start);
 
-                        // Извлекаем только голосовые ответы
-                        if (response.contains("голосовой ответ|")) {
-                            // Находим начало голосового ответа
-                            int voiceStart = response.indexOf("голосовой ответ|") + 16;
-                            if (voiceStart >= 16) {
-                                // Находим конец ответа (до разделителя или конца строки)
-                                int voiceEnd = response.indexOf("⸵", voiceStart);
-                                if (voiceEnd == -1) voiceEnd = response.length();
+                if ("Вы".equals(sender)) {
+                    formattedHistory.append("Вы: ").append(text).append("\n");
+                } else {
+                    // Для сообщений от бота и устройств: извлекаем голосовые ответы
+                    List<String> voiceResponses = new ArrayList<>();
+                    String[] parts = text.split("⸵");
 
-                                String voiceResponse = response.substring(voiceStart, voiceEnd);
-                                formattedHistory.append("Бот: ").append(voiceResponse).append("\n");
-                            }
-                        }
-                        // Обработка нового формата (чистый ответ)
-                        else {
-                            formattedHistory.append("Бот: ").append(response).append("\n");
+                    for (String part : parts) {
+                        if (part.startsWith("голосовой ответ|")) {
+                            String voiceText = part.substring("голосовой ответ|".length());
+                            voiceResponses.add(voiceText);
                         }
                     }
-                }
-                // Для сообщений с других устройств
-                else {
-                    int prefixEnd = line.indexOf(" (");
-                    if (prefixEnd > 0) {
-                        String prefix = line.substring(0, prefixEnd);
-                        int textStart = line.indexOf("): ") + 3;
-                        if (textStart >= 3) {
-                            String text = line.substring(textStart);
-                            formattedHistory.append(prefix).append(": ").append(text).append("\n");
-                        }
+
+                    if (!voiceResponses.isEmpty()) {
+                        String combinedResponse = TextUtils.join(" ", voiceResponses);
+                        formattedHistory.append(sender).append(": ").append(combinedResponse).append("\n");
                     }
                 }
             }
 
-            // Обновляем TextView
             resultView.setText(formattedHistory.toString());
             scrollToBottom();
-        } catch (Exception e) {
-            Log.e("History", "Error displaying history", e);
+
+        } catch (JSONException e) {
+            Log.e("History", "Error parsing history JSON", e);
+            // Fallback: display as plain text
+            resultView.setText(historyJson);
         }
     }
     private void showMainContent() {

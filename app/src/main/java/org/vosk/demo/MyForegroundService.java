@@ -66,61 +66,46 @@ public class MyForegroundService extends Service {
         Notification notification = createNotification();
         startForeground(NOTIFICATION_ID, notification);
 
-        if (intent != null && intent.hasExtra("volume")) {
-            String volumeCommand = intent.getStringExtra("volume");
-            changeVolumeInBackground(volumeCommand);
-        }
-
         if (intent != null && intent.hasExtra("command")) {
             try {
                 String commandJson = intent.getStringExtra("command");
                 JSONObject commandMessage = new JSONObject(commandJson);
-                JSONArray actions = commandMessage.getJSONArray("actions");
 
-                for (int i = 0; i < actions.length(); i++) {
-                    String action = actions.getString(i);
-                    String[] parts = action.split("\\|", 2);
+                // Обработка сообщений типа new_message
+                if ("new_message".equals(commandMessage.optString("type"))) {
+                    String sender = commandMessage.optString("sender", "Бот");
+                    JSONArray actions = commandMessage.getJSONArray("actions");
 
-                    if (parts.length == 2) {
-                        String actionType = parts[0].trim().toLowerCase();
-                        String actionContent = parts[1].trim();
-
-                        switch (actionType) {
-                            case "голосовой ответ":
-                                speakInBackground(actionContent);
-                                break;
-                            case "открытие ссылки":
-                                openLink(actionContent);
-                                break;
-                            case "открытие приложения":
-                                openAppInBackground(actionContent);
-                                break;
-                            case "изменение громкости":
-                                changeVolumeInBackground(actionContent);
-                                break;
-                            case "изменение яркости":
-                                changeBrightnessInBackground(actionContent);
-                                break;
-                            case "завершение процесса":
-                                closeAppByPackageName(actionContent);
-                                break;
-                            case "музыка":
-                                if (actionContent.equals("следующий трек")) {
-                                    controlMediaPlayback("next");
-                                } else if (actionContent.equals("предыдущий трек")) {
-                                    controlMediaPlayback("previous");
-                                } else if (actionContent.equals("выключить музыку")) {
-                                    controlMediaPlayback("pause");
-                                } else if (actionContent.equals("включить музыку")) {
-                                    controlMediaPlayback("play");
-                                }
-                                break;
-                            case "режим фото":
-                                break;
-                            default:
-                                Log.w("CommandHandler", "Unknown action type: " + actionType);
-                                showToast("Ошибка выполнения команды");
+                    // Комбинируем все голосовые ответы
+                    StringBuilder combinedVoice = new StringBuilder();
+                    for (int i = 0; i < actions.length(); i++) {
+                        String action = actions.getString(i);
+                        if (action.startsWith("голосовой ответ|")) {
+                            String voiceText = action.substring("голосовой ответ|".length());
+                            if (combinedVoice.length() > 0) {
+                                combinedVoice.append(" ");
+                            }
+                            combinedVoice.append(voiceText);
                         }
+                    }
+
+                    // Если есть голосовые ответы - обрабатываем их
+                    if (combinedVoice.length() > 0) {
+                        speakInBackground(sender, combinedVoice.toString());
+                    }
+
+                    // Обрабатываем остальные действия
+                    for (int i = 0; i < actions.length(); i++) {
+                        String action = actions.getString(i);
+                        if (!action.startsWith("голосовой ответ|")) {
+                            processAction(action);
+                        }
+                    }
+                } else {
+                    // Старая обработка других команд
+                    JSONArray actions = commandMessage.getJSONArray("actions");
+                    for (int i = 0; i < actions.length(); i++) {
+                        processAction(actions.getString(i));
                     }
                 }
             } catch (JSONException e) {
@@ -130,6 +115,53 @@ public class MyForegroundService extends Service {
         }
         return START_STICKY;
     }
+
+    private void processAction(String action) {
+        String[] parts = action.split("\\|", 2);
+        if (parts.length != 2) return;
+
+        String actionType = parts[0].trim().toLowerCase();
+        String actionContent = parts[1].trim();
+
+        switch (actionType) {
+            case "голосовой ответ":
+                // Обрабатывается в new_message
+                break;
+            case "открытие ссылки":
+                openLink(actionContent);
+                break;
+            case "открытие приложения":
+                openAppInBackground(actionContent);
+                break;
+            case "изменение громкости":
+                changeVolumeInBackground(actionContent);
+                break;
+            case "изменение яркости":
+                changeBrightnessInBackground(actionContent);
+                break;
+            case "завершение процесса":
+                closeAppByPackageName(actionContent);
+                break;
+            case "музыка":
+                if (actionContent.equals("следующий трек")) {
+                    controlMediaPlayback("next");
+                } else if (actionContent.equals("предыдущий трек")) {
+                    controlMediaPlayback("previous");
+                } else if (actionContent.equals("выключить музыку")) {
+                    controlMediaPlayback("pause");
+                } else if (actionContent.equals("включить музыку")) {
+                    controlMediaPlayback("play");
+                }
+                break;
+            case "режим фото":
+                // Реализация режима фото
+                break;
+            default:
+                Log.w("CommandHandler", "Unknown action type: " + actionType);
+                showToast("Ошибка выполнения команды");
+        }
+    }
+
 
     public void controlMediaPlayback(String action) {
         try {
@@ -207,22 +239,27 @@ public class MyForegroundService extends Service {
         }
     }
 
-    public void speakInBackground(String text) {
+    public void speakInBackground(String sender, String text) {
+        // Формируем полный текст для отображения
+        String fullText = sender + ": " + text;
+
+        // Обновляем UI через активность
+        FridayActivity activity = FridayActivity.getInstance();
+        if (activity != null) {
+            activity.updateResultText(fullText + "\n");
+        }
+
+        // Озвучиваем только текст (без имени отправителя)
         if (textToSpeech != null) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 textToSpeech.speak(text, TextToSpeech.QUEUE_ADD, null, null);
             } else {
                 textToSpeech.speak(text, TextToSpeech.QUEUE_ADD, null);
             }
-
-            showNotificationWithText(text);
-
-            // Обновляем UI через активность
-            FridayActivity activity = FridayActivity.getInstance();
-            if (activity != null) {
-                activity.updateResultText("Бот: " + text + "\n");
-            }
         }
+
+        // Показываем уведомление
+        showNotificationWithText(fullText);
     }
 
     public void showNotificationWithText(String text) {
