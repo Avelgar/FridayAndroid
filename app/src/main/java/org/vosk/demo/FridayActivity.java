@@ -15,15 +15,17 @@
 package org.vosk.demo;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.AlertDialog;
 import android.app.usage.UsageStats;
 import android.app.usage.UsageStatsManager;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.IntentFilter;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
-import android.hardware.Camera;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
@@ -36,14 +38,20 @@ import android.text.method.ScrollingMovementMethod;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
-import android.view.TextureView;
 import android.view.View;
+import android.view.inputmethod.EditorInfo;
+import android.widget.AdapterView;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
+import android.widget.Spinner;
 import android.widget.TextView;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.widget.ImageView;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -58,12 +66,17 @@ import org.vosk.android.SpeechStreamService;
 import org.vosk.android.StorageService;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.InputStream;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Date;
 import java.util.List;
 
 import androidx.annotation.NonNull;
@@ -82,6 +95,8 @@ import okhttp3.WebSocketListener;
 import android.util.Base64;
 
 import java.io.UnsupportedEncodingException;
+import java.util.Locale;
+
 import okhttp3.MediaType;
 import okhttp3.RequestBody;
 
@@ -99,10 +114,12 @@ public class FridayActivity extends Activity implements
     /* Used to handle permission request */
     private static final int PERMISSIONS_REQUEST_RECORD_AUDIO = 1;
 
+    private static final int PERMISSIONS_REQUEST_CAMERA = 2;
+
     private Model model;
     SpeechService speechService;
     private SpeechStreamService speechStreamService;
-    static TextView resultView;
+    static EditText resultView;
     private static TextToSpeech textToSpeech;
 
     private WebSocket webSocket;
@@ -124,12 +141,25 @@ public class FridayActivity extends Activity implements
     public String pendingHistory = null;
     private String pendingUserLogin = null;
 
-    private StringBuilder currentHistory = new StringBuilder();
+    private EditText messageEditText;
+    private Button sendButton;
 
-    private static final int REQUEST_CAMERA_PERMISSION = 200;
-    private TextureView textureView;
-    private Camera camera;
-    private File outputFile;
+    private ImageButton imageButton;
+
+    private final List<String> stopWords = Arrays.asList("стоп", "хватит", "довольно", "заткнись");
+    private boolean isBotSpeaking = false;
+    private BroadcastReceiver botSpeakingReceiver;
+    private String lastBotResponse = "";
+    private Spinner inputModeSpinner;
+    private String settingsFileName = "settings.json";
+
+    private static final int PICK_IMAGE_REQUEST = 1001;
+
+    private LinearLayout photoPreviewContainer;
+    private ImageView selectedPhotoView;
+    private Button removePhotoButton;
+    private Uri selectedImageUri = null;
+    private Bitmap selectedImageBitmap = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -151,23 +181,33 @@ public class FridayActivity extends Activity implements
         // Инициализация WebSocket соединения и отправка данных
         initWebSocketConnection();
         startConnectionChecker();
+
+        botSpeakingReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (MyForegroundService.ACTION_BOT_SPEAKING.equals(intent.getAction())) {
+                    boolean isSpeaking = intent.getBooleanExtra(MyForegroundService.EXTRA_IS_SPEAKING, false);
+                    isBotSpeaking = isSpeaking;
+
+                    //Если речь закончилась и мы в режиме "Имя-ответ-команда"
+                    if (!isSpeaking && isWaitingForCommand) {
+                        new Handler().postDelayed(() -> {
+                            //Убеждаемся, что мы все еще в этом режиме и состоянии
+                            if (isWaitingForCommand && !isBotSpeaking) {
+                                //Можно добавить дополнительную логику здесь при необходимости
+                            }
+                        }, 500); // Задержка 500 мс
+                    }
+                }
+            }
+        };
+
+        IntentFilter filter = new IntentFilter(MyForegroundService.ACTION_BOT_SPEAKING);
+        registerReceiver(botSpeakingReceiver, filter);
     }
 
     public static FridayActivity getInstance() {
         return instance;
-    }
-
-    public static void setInstance(FridayActivity activity) {
-        instance = activity;
-    }
-
-    // Добавьте эти методы в ваш класс FridayActivity
-    public boolean isDataValidForTest(JSONObject data) {
-        return isDataValid(data);
-    }
-
-    public void testOnResult(String hypothesis) {
-        onResult(hypothesis);
     }
 
     public void initWebSocketConnection() {
@@ -176,7 +216,7 @@ public class FridayActivity extends Activity implements
         if (client == null) {
             client = new OkHttpClient();
         }
-        Request request = new Request.Builder().url("ws://blue.fnode.me:8114").build();
+        Request request = new Request.Builder().url("wss://friday-assistant.ru/ws").build();
         webSocket = client.newWebSocket(request, new WebSocketListener() {
             @Override
             public void onOpen(WebSocket webSocket, Response response) {
@@ -329,8 +369,17 @@ public class FridayActivity extends Activity implements
                 JSONObject jsonMessage = new JSONObject(encodedMessage);
 
                 if ("new_message".equals(jsonMessage.optString("type"))) {
-                    // Обработка команды выполнения
+                    JSONArray actions = jsonMessage.getJSONArray("actions");
+                    StringBuilder botResponse = new StringBuilder();
 
+                    for (int i = 0; i < actions.length(); i++) {
+                        String action = actions.getString(i);
+                        if (action.startsWith("голосовой ответ|")) {
+                            botResponse.append(action.substring("голосовой ответ|".length())).append(" ");
+                        }
+                    }
+
+                    lastBotResponse = botResponse.toString().trim();
                     try {
                         JSONObject backgroundCommand = new JSONObject(jsonMessage.toString());
                         executeInBackground(backgroundCommand);
@@ -362,6 +411,7 @@ public class FridayActivity extends Activity implements
                         response.put("name", jsonMessage.optString("name", ""));
                         response.put("source_name", jsonMessage.optString("source_device"));
                         response.put("programs", programs);
+                        response.put("command_type", jsonMessage.optString("command_type", ""));
 
                         // Отправляем ответ
                         sendEncodedMessage(response);
@@ -429,9 +479,27 @@ public class FridayActivity extends Activity implements
             }
         });
     }
+    @SuppressLint("WrongViewCast")
     private void openMainWindow() {
         isRegistrationWindowOpen = false;
         setContentView(R.layout.main);
+
+        inputModeSpinner = findViewById(R.id.input_mode_spinner);
+
+        // Загрузка сохраненного режима ввода
+        loadInputModeSetting();
+
+        // Установка обработчика изменений Spinner
+        inputModeSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                saveInputModeSetting(position);
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+            }
+        });
 
         // Инициализация всех представлений
         mainContent = findViewById(R.id.main_content);
@@ -492,6 +560,30 @@ public class FridayActivity extends Activity implements
             }
         }
 
+        messageEditText = findViewById(R.id.message_edit_text);
+        sendButton = findViewById(R.id.send_button);
+        // Обработчик кнопки отправки
+        sendButton.setOnClickListener(v -> sendTextMessage());
+
+        // Обработка нажатия Enter (Send) на клавиатуре
+        messageEditText.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_SEND) {
+                sendTextMessage();
+                return true;
+            }
+            return false;
+        });
+
+        imageButton = findViewById(R.id.attach_button);
+        imageButton.setOnClickListener(v -> openImagePicker());
+
+        photoPreviewContainer = findViewById(R.id.photo_preview_container);
+        selectedPhotoView = findViewById(R.id.selected_photo_view);
+        removePhotoButton = findViewById(R.id.remove_photo_button);
+
+        // Обработчик кнопки удаления фото
+        removePhotoButton.setOnClickListener(v -> removeSelectedPhoto());
+
         // Показать основной контент по умолчанию
         showMainContent();
 
@@ -500,6 +592,18 @@ public class FridayActivity extends Activity implements
 
         resultView = findViewById(R.id.result_text);
         resultView.setMovementMethod(new ScrollingMovementMethod());
+
+        resultView.setOnLongClickListener(v -> {
+            android.content.ClipboardManager clipboard =
+                    (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            android.content.ClipData clip = android.content.ClipData.newPlainText(
+                    "Copied Text", resultView.getText().toString()
+            );
+            clipboard.setPrimaryClip(clip);
+            Toast.makeText(FridayActivity.this, "Текст скопирован", Toast.LENGTH_SHORT).show();
+            return true;
+        });
+
         setUiState(STATE_START);
 
         // Обработчики кнопок
@@ -525,53 +629,212 @@ public class FridayActivity extends Activity implements
         }
     }
 
+    private void openImagePicker() {
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+        intent.setType("image/*");
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+
+        try {
+            startActivityForResult(
+                    Intent.createChooser(intent, "Выберите фото"),
+                    PICK_IMAGE_REQUEST
+            );
+        } catch (android.content.ActivityNotFoundException ex) {
+            Toast.makeText(this, "Установите файловый менеджер", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+
+        if (requestCode == PICK_IMAGE_REQUEST && resultCode == RESULT_OK) {
+            if (data != null && data.getData() != null) {
+                Uri selectedImageUri = data.getData();
+                handleSelectedImage(selectedImageUri);
+            }
+        }
+    }
+
+    private void handleSelectedImage(Uri imageUri) {
+        try {
+            // Очищаем предыдущее фото
+            if (selectedImageBitmap != null) {
+                selectedImageBitmap.recycle();
+                selectedImageBitmap = null;
+            }
+
+            // Сохраняем URI
+            this.selectedImageUri = imageUri;
+
+            // Загружаем и отображаем фото
+            InputStream imageStream = getContentResolver().openInputStream(imageUri);
+            selectedImageBitmap = BitmapFactory.decodeStream(imageStream);
+            imageStream.close();
+
+            // Показываем превью
+            runOnUiThread(() -> {
+                selectedPhotoView.setImageBitmap(selectedImageBitmap);
+                photoPreviewContainer.setVisibility(View.VISIBLE);
+                scrollToBottom();
+            });
+
+            Toast.makeText(this, "Фото выбрано", Toast.LENGTH_SHORT).show();
+
+        } catch (Exception e) {
+            Log.e("PhotoSelection", "Ошибка загрузки фото", e);
+            Toast.makeText(this, "Ошибка загрузки фото", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void removeSelectedPhoto() {
+        if (selectedImageBitmap != null) {
+            selectedImageBitmap.recycle();
+            selectedImageBitmap = null;
+        }
+        selectedImageUri = null;
+
+        // Скрываем контейнер превью
+        photoPreviewContainer.setVisibility(View.GONE);
+
+        // Очищаем ImageView
+        selectedPhotoView.setImageDrawable(null);
+    }
+
+
+    private void loadInputModeSetting() {
+        JSONObject settings = readDataFromFile(this, settingsFileName);
+        try {
+            if (settings != null && settings.has("input_mode")) {
+                String savedInputMode = settings.getString("input_mode");
+
+                // Сопоставление строковых значений с позициями в Spinner
+                String[] inputModes = getResources().getStringArray(R.array.input_modes);
+                for (int i = 0; i < inputModes.length; i++) {
+                    if (inputModes[i].equals(savedInputMode)) {
+                        inputModeSpinner.setSelection(i);
+                        break;
+                    }
+                }
+            }
+        } catch (JSONException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void saveInputModeSetting(int position) {
+        try {
+            JSONObject settings = readDataFromFile(this, settingsFileName);
+            if (settings == null) {
+                settings = new JSONObject();
+            }
+
+            String[] inputModes = getResources().getStringArray(R.array.input_modes);
+            if (position >= 0 && position < inputModes.length) {
+                settings.put("input_mode", inputModes[position]);
+                saveDataToFile(this, settingsFileName, settings);
+            }
+        } catch (JSONException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void sendTextMessage() {
+        String message = messageEditText.getText().toString().trim();
+        if (message.isEmpty()) {
+            Toast.makeText(this, "Сообщение не может быть пустым", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        try {
+            // Формируем сообщение
+            JSONObject messageJson = new JSONObject();
+            messageJson.put("command", message);
+            messageJson.put("mac", getUniqueDeviceId(this));
+            messageJson.put("name", botName);
+            messageJson.put("type", "текстовое сообщение");
+            SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.getDefault());
+            String timestamp = sdf.format(new Date())
+                    .replaceAll("(\\d{2})(\\d{2})$", "$1:$2");
+            messageJson.put("timestamp", timestamp);
+
+            if (selectedImageUri != null) {
+                messageJson.put("screenshot", encodeImageToBase64(selectedImageBitmap));
+            }
+
+            // Отправка через WebSocket
+            sendEncodedMessage(messageJson);
+
+            // Обновляем UI
+            runOnUiThread(() -> {
+                resultView.append("Вы: " + message + "\n");
+                scrollToBottom();
+                messageEditText.setText("");
+            });
+
+            removeSelectedPhoto();
+
+        } catch (JSONException e) {
+            Log.e("TextMessage", "Error creating message JSON", e);
+            Toast.makeText(this, "Ошибка создания сообщения", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private String encodeImageToBase64(Bitmap bitmap) {
+        ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 50, byteArrayOutputStream);
+        byte[] byteArray = byteArrayOutputStream.toByteArray();
+        return Base64.encodeToString(byteArray, Base64.DEFAULT);
+    }
+
     private void displayHistory(String historyJson) {
         if (resultView == null || historyJson == null || historyJson.trim().isEmpty()) {
             return;
         }
 
-        try {
-            JSONArray historyArray = new JSONArray(historyJson);
-            StringBuilder formattedHistory = new StringBuilder();
+        runOnUiThread(() -> { // Добавляем выполнение в UI поток
+            try {
+                JSONArray historyArray = new JSONArray(historyJson);
+                StringBuilder formattedHistory = new StringBuilder();
 
-            for (int i = 0; i < historyArray.length(); i++) {
-                JSONObject message = historyArray.getJSONObject(i);
-                String sender = message.optString("sender", "");
-                String text = message.optString("text", "");
+                for (int i = 0; i < historyArray.length(); i++) {
+                    JSONObject message = historyArray.getJSONObject(i);
+                    String sender = message.optString("sender", "");
+                    String text = message.optString("text", "");
 
-                if (sender.isEmpty() || text.isEmpty()) {
-                    continue;
-                }
+                    if (sender.isEmpty() || text.isEmpty()) {
+                        continue;
+                    }
 
-                if ("Вы".equals(sender)) {
-                    formattedHistory.append("Вы: ").append(text).append("\n");
-                } else {
-                    // Для сообщений от бота и устройств: извлекаем голосовые ответы
-                    List<String> voiceResponses = new ArrayList<>();
-                    String[] parts = text.split("⸵");
+                    if ("Вы".equals(sender)) {
+                        formattedHistory.append("Вы: ").append(text).append("\n");
+                    } else {
+                        // Для сообщений от бота и устройств: извлекаем голосовые ответы
+                        List<String> voiceResponses = new ArrayList<>();
+                        String[] parts = text.split("⸵");
+                        for (String part : parts) {
+                            if (part.startsWith("голосовой ответ|")) {
+                                String voiceText = part.substring("голосовой ответ|".length());
+                                voiceResponses.add(voiceText);
+                            }
+                            else if (part.startsWith("текстовой ответ|")) {
+                                String typeText = part.substring("текстовой ответ|".length());
+                                voiceResponses.add(typeText);
+                            }
+                        }
 
-                    for (String part : parts) {
-                        if (part.startsWith("голосовой ответ|")) {
-                            String voiceText = part.substring("голосовой ответ|".length());
-                            voiceResponses.add(voiceText);
+                        if (!voiceResponses.isEmpty()) {
+                            String combinedResponse = TextUtils.join(" ", voiceResponses);
+                            formattedHistory.append(sender).append(": ").append(combinedResponse).append("\n");
                         }
                     }
-
-                    if (!voiceResponses.isEmpty()) {
-                        String combinedResponse = TextUtils.join(" ", voiceResponses);
-                        formattedHistory.append(sender).append(": ").append(combinedResponse).append("\n");
-                    }
                 }
+                resultView.setText(formattedHistory.toString());
+                scrollToBottom();
+            } catch (JSONException e) {
+                resultView.setText(historyJson);
             }
-
-            resultView.setText(formattedHistory.toString());
-            scrollToBottom();
-
-        } catch (JSONException e) {
-            Log.e("History", "Error parsing history JSON", e);
-            // Fallback: display as plain text
-            resultView.setText(historyJson);
-        }
+        });
     }
     private void showMainContent() {
         mainContent.setVisibility(View.VISIBLE);
@@ -620,7 +883,7 @@ public class FridayActivity extends Activity implements
 
                 RequestBody body = RequestBody.create(JSON, json.toString());
                 Request request = new Request.Builder()
-                        .url("http://blue.fnode.me:25550/get_devices")
+                        .url("https://friday-assistant.ru/get_devices")
                         .post(body)
                         .build();
 
@@ -805,7 +1068,7 @@ public class FridayActivity extends Activity implements
 
                 RequestBody body = RequestBody.create(JSON, json.toString());
                 Request request = new Request.Builder()
-                        .url("http://blue.fnode.me:25550/disconnect_device") // Замените на ваш endpoint
+                        .url("https://friday-assistant.ru/disconnect_device") // Замените на ваш endpoint
                         .post(body)
                         .build();
 
@@ -908,7 +1171,7 @@ public class FridayActivity extends Activity implements
 
                 RequestBody body = RequestBody.create(JSON, json.toString());
                 Request request = new Request.Builder()
-                        .url("http://blue.fnode.me:25550/connect_device")
+                        .url("https://friday-assistant.ru/connect_device")
                         .post(body)
                         .build();
 
@@ -1071,7 +1334,7 @@ public class FridayActivity extends Activity implements
 
                 RequestBody body = RequestBody.create(JSON, json.toString());
                 Request request = new Request.Builder()
-                        .url("http://blue.fnode.me:25550/register")
+                        .url("https://friday-assistant.ru/register")
                         .post(body)
                         .build();
 
@@ -1082,12 +1345,10 @@ public class FridayActivity extends Activity implements
                     try {
                         JSONObject jsonResponse = new JSONObject(responseBody);
                         if (jsonResponse.getString("status").equals("success")) {
-                            pendingUserLogin = jsonResponse.getString("user_login");
                             Toast.makeText(this,
                                     jsonResponse.getString("message"),
                                     Toast.LENGTH_LONG).show();
                             dialog.dismiss();
-                            openMainWindow(); // Обновляем главное окно
                         } else {
                             tvResponse.setText(jsonResponse.getString("message"));
                         }
@@ -1115,10 +1376,18 @@ public class FridayActivity extends Activity implements
 
         EditText etLoginOrEmail = dialogView.findViewById(R.id.etLoginOrEmail);
         EditText etPassword = dialogView.findViewById(R.id.etPassword);
+        TextView tvForgotPassword = dialogView.findViewById(R.id.tvForgotPassword);
         TextView tvServerResponse = dialogView.findViewById(R.id.tvServerResponse);
         Button btnLogin = dialogView.findViewById(R.id.btnLogin);
 
         AlertDialog dialog = builder.create();
+
+        // Добавляем обработчик для "Забыли пароль?"
+        tvForgotPassword.setOnClickListener(v -> {
+            dialog.dismiss();
+            Intent intent = new Intent(FridayActivity.this, RecoveryPasswordActivity.class);
+            startActivity(intent);
+        });
 
         btnLogin.setOnClickListener(v -> {
             String loginOrEmail = etLoginOrEmail.getText().toString().trim();
@@ -1149,7 +1418,7 @@ public class FridayActivity extends Activity implements
 
                 RequestBody body = RequestBody.create(JSON, json.toString());
                 Request request = new Request.Builder()
-                        .url("http://blue.fnode.me:25550/login")
+                        .url("https://friday-assistant.ru/login")
                         .post(body)
                         .build();
 
@@ -1203,7 +1472,7 @@ public class FridayActivity extends Activity implements
 
                 RequestBody body = RequestBody.create(JSON, json.toString());
                 Request request = new Request.Builder()
-                        .url("http://blue.fnode.me:25550/logout")
+                        .url("https://friday-assistant.ru/logout")
                         .post(body)
                         .build();
 
@@ -1291,6 +1560,7 @@ public class FridayActivity extends Activity implements
             try {
                 JSONObject defaultSettings = new JSONObject();
                 defaultSettings.put("name", "пятница");
+                defaultSettings.put("input_mode", "Имя-ответ-команда"); // Добавлено значение по умолчанию
 
                 FileOutputStream fos = openFileOutput(fileName, Context.MODE_PRIVATE);
                 fos.write(defaultSettings.toString().getBytes());
@@ -1301,56 +1571,64 @@ public class FridayActivity extends Activity implements
         }
     }
 
-    public void clearHistory() {
-        new Thread(() -> {
-            try {
-                String macAddress = getUniqueDeviceId(this);
+    public static void clearHistory() {
+        if (instance != null) {
+            instance.runOnUiThread(() -> {
+                if (resultView != null) {
+                    resultView.setText("");
+                }
+            });
 
-                OkHttpClient client = new OkHttpClient();
-                MediaType JSON = MediaType.parse("application/json; charset=utf-8");
+            // Отправляем запрос на сервер для очистки истории
+            new Thread(() -> {
+                try {
+                    String macAddress = instance.getUniqueDeviceId(instance);
 
-                JSONObject json = new JSONObject();
-                json.put("mac", macAddress);
+                    OkHttpClient client = new OkHttpClient();
+                    MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
-                RequestBody body = RequestBody.create(JSON, json.toString());
-                Request request = new Request.Builder()
-                        .url("http://blue.fnode.me:25550/clear_history")
-                        .post(body)
-                        .build();
+                    JSONObject json = new JSONObject();
+                    json.put("mac", macAddress);
 
-                Response response = client.newCall(request).execute();
-                String responseBody = response.body().string();
+                    RequestBody body = RequestBody.create(JSON, json.toString());
+                    Request request = new Request.Builder()
+                            .url("https://friday-assistant.ru/clear_history")
+                            .post(body)
+                            .build();
 
-                runOnUiThread(() -> {
-                    try {
-                        JSONObject jsonResponse = new JSONObject(responseBody);
-                        if (jsonResponse.getString("status").equals("success")) {
-                            resultView.setText("");
-                            Toast.makeText(this,
-                                    jsonResponse.getString("message"),
-                                    Toast.LENGTH_LONG).show();
-                        } else {
-                            Toast.makeText(this,
-                                    "Ошибка при очистке истории",
+                    Response response = client.newCall(request).execute();
+                    String responseBody = response.body().string();
+
+                    instance.runOnUiThread(() -> {
+                        try {
+                            JSONObject jsonResponse = new JSONObject(responseBody);
+                            if (jsonResponse.getString("status").equals("success")) {
+                                Toast.makeText(instance,
+                                        jsonResponse.getString("message"),
+                                        Toast.LENGTH_LONG).show();
+                            } else {
+                                Toast.makeText(instance,
+                                        "Ошибка при очистке истории",
+                                        Toast.LENGTH_SHORT).show();
+                            }
+                        } catch (JSONException e) {
+                            Toast.makeText(instance,
+                                    "Ошибка обработки ответа сервера",
                                     Toast.LENGTH_SHORT).show();
+                            e.printStackTrace();
                         }
-                    } catch (JSONException e) {
-                        Toast.makeText(this,
-                                "Ошибка обработки ответа сервера",
-                                Toast.LENGTH_SHORT).show();
-                        e.printStackTrace();
-                    }
-                });
+                    });
 
-            } catch (Exception e) {
-                runOnUiThread(() -> {
-                    Toast.makeText(this,
-                            "Ошибка при отправке запроса: " + e.getMessage(),
-                            Toast.LENGTH_SHORT).show();
-                });
-                e.printStackTrace();
-            }
-        }).start();
+                } catch (Exception e) {
+                    instance.runOnUiThread(() -> {
+                        Toast.makeText(instance,
+                                "Ошибка при отправке запроса: " + e.getMessage(),
+                                Toast.LENGTH_SHORT).show();
+                    });
+                    e.printStackTrace();
+                }
+            }).start();
+        }
     }
 
     private void executeInBackground(JSONObject commandMessage) {
@@ -1458,6 +1736,14 @@ public class FridayActivity extends Activity implements
                 startActivity(intent);
             }
         }
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this,
+                    new String[]{Manifest.permission.CAMERA},
+                    PERMISSIONS_REQUEST_CAMERA);
+        }
+
     }
 
     private void initModel() {
@@ -1537,13 +1823,18 @@ public class FridayActivity extends Activity implements
             client = null;
         }
 
+        if (botSpeakingReceiver != null) {
+            unregisterReceiver(botSpeakingReceiver);
+        }
+
         // Остановка проверки соединения
         connectionHandler.removeCallbacksAndMessages(null);
 
         super.onDestroy();
         instance = null;
     }
-
+    private boolean isWaitingForCommand = false;
+    private String pendingCommand = "";
 
     @Override
     public void onResult(String hypothesis) {
@@ -1554,11 +1845,70 @@ public class FridayActivity extends Activity implements
         } catch (Exception e) {
             e.printStackTrace();
         }
-        if (spokenText.toLowerCase().contains(botName)) {
+        if (spokenText.equals("")){
+            return;
+        }
+        // Используем локальную переменную вместо статической
+        if (isBotSpeaking) {
+            // Проверяем, содержит ли речь пользователя стоп-слово
+            boolean hasStopWord = false;
+            for (String stopWord : stopWords) {
+                if (spokenText.toLowerCase().contains(stopWord)) {
+                    hasStopWord = true;
+                    break;
+                }
+            }
+
+            // Если есть стоп-слово и его нет в последнем ответе бота
+            if (hasStopWord && !containsAnyStopWord(lastBotResponse)) {
+                // Останавливаем речь бота через Intent
+                Intent stopIntent = new Intent(this, MyForegroundService.class);
+                stopIntent.setAction("STOP_SPEECH");
+                startService(stopIntent);
+                return; // Прерываем дальнейшую обработку
+            }
+            return;
+        }
+
+        String selectedMode = inputModeSpinner.getSelectedItem().toString();
+
+        if (selectedMode.equals("Имя + команда")) {
+            if (spokenText.toLowerCase().contains(botName.toLowerCase())) {
+                String finalSpokenText = spokenText;
+                runOnUiThread(() -> {
+                    if (resultView != null) {
+                        resultView.append("Вы: " + finalSpokenText + "\n");
+                        scrollToBottom();
+                    }
+                });
+                try {
+                    JSONObject commandMessage = new JSONObject();
+                    commandMessage.put("command", finalSpokenText);
+                    commandMessage.put("mac", getUniqueDeviceId(this));
+                    commandMessage.put("name", botName);
+                    java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", java.util.Locale.getDefault());
+                    String timestamp = sdf.format(new java.util.Date())
+                            .replaceAll("(\\d{2})(\\d{2})$", "$1:$2");
+                    commandMessage.put("timestamp", timestamp);
+                    commandMessage.put("type", "голосовое сообщение");
+                    if (selectedImageUri != null) {
+                        commandMessage.put("screenshot", encodeImageToBase64(selectedImageBitmap));
+                    }
+
+                    removeSelectedPhoto();
+                    sendEncodedMessage(commandMessage);
+                } catch (JSONException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+        else if(selectedMode.equals("Разговорный режим")) {
             String finalSpokenText = spokenText;
             runOnUiThread(() -> {
-                resultView.append("Вы: " + finalSpokenText + "\n");
-                scrollToBottom();
+                if (resultView != null) {
+                    resultView.append("Вы: " + finalSpokenText + "\n");
+                    scrollToBottom();
+                }
             });
             try {
                 JSONObject commandMessage = new JSONObject();
@@ -1567,35 +1917,112 @@ public class FridayActivity extends Activity implements
                 commandMessage.put("name", botName);
                 java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", java.util.Locale.getDefault());
                 String timestamp = sdf.format(new java.util.Date())
-                        .replaceAll("(\\d{2})(\\d{2})$", "$1:$2"); // Преобразуем +0300 в +03:00
+                        .replaceAll("(\\d{2})(\\d{2})$", "$1:$2");
                 commandMessage.put("timestamp", timestamp);
+                commandMessage.put("type", "голосовое сообщение");
+                if (selectedImageUri != null) {
+                    commandMessage.put("screenshot", encodeImageToBase64(selectedImageBitmap));
+                }
 
+                removeSelectedPhoto();
                 sendEncodedMessage(commandMessage);
             } catch (JSONException e) {
                 e.printStackTrace();
             }
+        }
+        else if(selectedMode.equals("Имя-ответ-команда")) {
+            if (!isWaitingForCommand) {
+                // Первый этап: ожидаем имя бота
+                if (spokenText.toLowerCase().equals(botName.toLowerCase())) {
+                    String finalSpokenText = spokenText;
+                    isWaitingForCommand = true;
 
+                    runOnUiThread(() -> {
+                        if (resultView != null) {
+                            resultView.append("Вы: " + finalSpokenText + "\n");
+                            scrollToBottom();
+                        }
+                    });
+                    isBotSpeaking = true;
+                    // Отправляем команду сервису для озвучивания
+                    Intent speakIntent = new Intent(FridayActivity.this, MyForegroundService.class);
+                    speakIntent.setAction("SPEAK_TEXT");
+                    speakIntent.putExtra("sender", "Бот");
+                    speakIntent.putExtra("text", "Слушаю Вас");
+                    startService(speakIntent);
+                }
+            } else {
+                // Второй этап: ожидаем команду после имени
+                pendingCommand = spokenText;
+
+                // Третий этап: отправляем команду на сервер
+                String finalSpokenText = pendingCommand;
+                runOnUiThread(() -> {
+                    if (resultView != null) {
+                        resultView.append("Вы: " + finalSpokenText + "\n");
+                        scrollToBottom();
+                    }
+                });
+                try {
+                    JSONObject commandMessage = new JSONObject();
+                    commandMessage.put("command", finalSpokenText);
+                    commandMessage.put("mac", getUniqueDeviceId(this));
+                    commandMessage.put("name", botName);
+                    java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", java.util.Locale.getDefault());
+                    String timestamp = sdf.format(new java.util.Date())
+                            .replaceAll("(\\d{2})(\\d{2})$", "$1:$2");
+                    commandMessage.put("timestamp", timestamp);
+                    commandMessage.put("type", "голосовое сообщение");
+                    if (selectedImageUri != null) {
+                        commandMessage.put("screenshot", encodeImageToBase64(selectedImageBitmap));
+                    }
+
+                    removeSelectedPhoto();
+                    sendEncodedMessage(commandMessage);
+
+                    // Сбрасываем состояние ожидания команды
+                    isWaitingForCommand = false;
+                    pendingCommand = "";
+                } catch (JSONException e) {
+                    e.printStackTrace();
+                }
+            }
         }
     }
 
-    public void updateResultText(String text)
-    {
+    // Вспомогательный метод для проверки стоп-слов в тексте
+    private boolean containsAnyStopWord(String text) {
+        if (text == null || text.isEmpty()) return false;
+
+        for (String stopWord : stopWords) {
+            if (text.toLowerCase().contains(stopWord)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public void updateResultText(String text) {
         runOnUiThread(() -> {
-            resultView.append(text);
-            scrollToBottom();
+            if (resultView != null) {
+                resultView.append(text);
+                scrollToBottom();
+            }
         });
     }
 
     private void scrollToBottom() {
-        resultView.post(() -> {
-            int scrollAmount = resultView.getLayout().getLineTop(resultView.getLineCount())
-                    - resultView.getHeight();
-            if (scrollAmount > 0) {
-                resultView.scrollTo(0, scrollAmount);
-            } else {
-                resultView.scrollTo(0, 0);
-            }
-        });
+        if (resultView != null) {
+            resultView.post(() -> {
+                int scrollAmount = resultView.getLayout().getLineTop(resultView.getLineCount())
+                        - resultView.getHeight();
+                if (scrollAmount > 0) {
+                    resultView.scrollTo(0, scrollAmount);
+                } else {
+                    resultView.scrollTo(0, 0);
+                }
+            });
+        }
     }
 
     public JSONArray getInstalledPackages() {

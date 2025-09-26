@@ -20,4 +20,9 @@
     <string name="change_data">Change Data</string>
     <string name="devices">Devices</string>
     <string name="settings">Settings</string>
+    <array name="input_modes">
+        <item>Имя-ответ-команда</item>
+        <item>Имя + команда</item>
+        <item>Разговорный режим</item>
+    </array>
 </resources>

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@android:color/black"
+    android:weightSum="2">
+
+    <!-- Верхняя половина экрана с выпуклыми скругленными краями -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="@drawable/rounded_convex_top"
+        android:clipToOutline="true">
+
+        <TextureView
+            android:id="@+id/texture_view_top"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_margin="8dp" />
+
+    </FrameLayout>
+
+    <!-- Горизонтальный разделитель - жирный и черный -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="2dp"
+        android:background="@android:color/black" />
+
+    <!-- Нижняя половина экрана с выпуклыми скругленными краями -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="@drawable/rounded_convex_bottom"
+        android:clipToOutline="true">
+
+        <TextureView
+            android:id="@+id/texture_view_bottom"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_margin="8dp" />
+
+    </FrameLayout>
+
+</LinearLayout>

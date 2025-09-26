@@ -10,7 +10,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 public class GeminiService {
-    private static final String SERVER_URL = "http://blue.fnode.me:25550/generate";
+    private static final String SERVER_URL = "https://friday-assistant.ru/generate";
     private static final OkHttpClient client = new OkHttpClient();
 
     public static String generateText(String prompt) throws IOException, ExecutionException, InterruptedException {

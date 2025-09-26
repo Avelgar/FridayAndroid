@@ -21,6 +21,7 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.provider.Settings;
 import android.speech.tts.TextToSpeech;
+import android.speech.tts.UtteranceProgressListener;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.Window;
@@ -34,18 +35,35 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 
 public class MyForegroundService extends Service {
     private static final int NOTIFICATION_ID = 123;
     private static final String CHANNEL_ID = "AssistantServiceChannel";
     public TextToSpeech textToSpeech;
 
+    // Добавляем поле handler
+    private Handler handler;
+
+    public static final String ACTION_BOT_SPEAKING = "org.vosk.demo.ACTION_BOT_SPEAKING";
+    public static final String EXTRA_IS_SPEAKING = "is_speaking";
+
+    private void broadcastSpeakingState(boolean isSpeaking) {
+        Intent intent = new Intent(ACTION_BOT_SPEAKING);
+        intent.putExtra(EXTRA_IS_SPEAKING, isSpeaking);
+        sendBroadcast(intent);
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
         createNotificationChannel();
+
+        // Инициализируем handler
+        handler = new Handler(Looper.getMainLooper());
 
         textToSpeech = new TextToSpeech(this, status -> {
             if (status == TextToSpeech.SUCCESS) {
@@ -59,12 +77,27 @@ public class MyForegroundService extends Service {
             }
         });
     }
-
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         createNotificationChannel();
         Notification notification = createNotification();
         startForeground(NOTIFICATION_ID, notification);
+
+        if (intent != null && "STOP_SPEECH".equals(intent.getAction())) {
+            stopBotSpeaking();
+            return START_STICKY;
+        }
+        else if(intent != null && "SPEAK_TEXT".equals(intent.getAction())){
+            String sender = intent.getStringExtra("sender");
+            String text = intent.getStringExtra("text");
+            if (text != null) {
+                if (sender != null) {
+                    speakInBackground(sender, text);
+                } else {
+                    speakInBackground("Бот", text); // Значение по умолчанию
+                }
+            }
+        }
 
         if (intent != null && intent.hasExtra("command")) {
             try {
@@ -80,26 +113,36 @@ public class MyForegroundService extends Service {
                     StringBuilder combinedVoice = new StringBuilder();
                     for (int i = 0; i < actions.length(); i++) {
                         String action = actions.getString(i);
-                        if (action.startsWith("голосовой ответ|")) {
-                            String voiceText = action.substring("голосовой ответ|".length());
+                        String[] parts = action.split("\\|", 2);
+                        if (parts.length != 2) continue;
+
+                        String actionType = parts[0].trim().toLowerCase();
+                        String actionContent = parts[1].trim();
+
+                        if ("голосовой ответ".equals(actionType)) {
                             if (combinedVoice.length() > 0) {
                                 combinedVoice.append(" ");
                             }
-                            combinedVoice.append(voiceText);
+                            combinedVoice.append(actionContent);
                         }
-                    }
-
-                    // Если есть голосовые ответы - обрабатываем их
-                    if (combinedVoice.length() > 0) {
-                        speakInBackground(sender, combinedVoice.toString());
-                    }
-
-                    // Обрабатываем остальные действия
-                    for (int i = 0; i < actions.length(); i++) {
-                        String action = actions.getString(i);
-                        if (!action.startsWith("голосовой ответ|")) {
+                        else if ("текстовой ответ".equals(actionType)) {
+                            // Выводим текстовой ответ сразу
+                            String message = sender + ": " + actionContent;
+                            FridayActivity activity = FridayActivity.getInstance();
+                            if (activity != null) {
+                                activity.updateResultText(message + "\n");
+                            }
+                            showNotificationWithText(message);
+                        }
+                        else {
+                            // Обработка других действий
                             processAction(action);
                         }
+                    }
+
+                    // Если есть голосовые ответы - озвучиваем их
+                    if (combinedVoice.length() > 0) {
+                        speakInBackground(sender, combinedVoice.toString());
                     }
                 } else {
                     // Старая обработка других команд
@@ -125,7 +168,19 @@ public class MyForegroundService extends Service {
 
         switch (actionType) {
             case "голосовой ответ":
-                // Обрабатывается в new_message
+                // Обрабатывается в onStartCommand
+                break;
+            case "текстовой ответ":
+                // Обрабатывается в onStartCommand
+                break;
+            case "режим камеры":
+                startCameraActivity();
+                break;
+            case "выключить режим камеры":
+                stopCameraActivity();
+                break;
+            case "очистка истории":
+                FridayActivity.clearHistory();
                 break;
             case "открытие ссылки":
                 openLink(actionContent);
@@ -162,6 +217,17 @@ public class MyForegroundService extends Service {
         }
     }
 
+    private void startCameraActivity() {
+        Intent cameraIntent = new Intent(this, CameraActivity.class);
+        cameraIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        startActivity(cameraIntent);
+    }
+
+    private void stopCameraActivity() {
+        // Отправляем broadcast для закрытия активности камеры
+        Intent closeIntent = new Intent("CLOSE_CAMERA_ACTION");
+        sendBroadcast(closeIntent);
+    }
 
     public void controlMediaPlayback(String action) {
         try {
@@ -246,21 +312,66 @@ public class MyForegroundService extends Service {
         // Обновляем UI через активность
         FridayActivity activity = FridayActivity.getInstance();
         if (activity != null) {
-            activity.updateResultText(fullText + "\n");
+            activity.runOnUiThread(() -> {
+                activity.updateResultText(fullText + "\n");
+            });
         }
 
-        // Озвучиваем только текст (без имени отправителя)
+
+        broadcastSpeakingState(true);
+
         if (textToSpeech != null) {
+            // Генерируем уникальный идентификатор для высказывания
+            String utteranceId = UUID.randomUUID().toString();
+
+            // Устанавливаем слушатель для завершения речи
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                textToSpeech.speak(text, TextToSpeech.QUEUE_ADD, null, null);
+                textToSpeech.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+                    @Override
+                    public void onStart(String utteranceId) {
+                        // Не требуется
+                    }
+
+                    @Override
+                    public void onDone(String utteranceId) {
+                        // Когда речь закончена, ждем еще секунду и отправляем состояние
+                        handler.postDelayed(() -> broadcastSpeakingState(false), 2000);
+                    }
+
+                    @Override
+                    public void onError(String utteranceId) {
+                        // В случае ошибки также отправляем состояние
+                        handler.postDelayed(() -> broadcastSpeakingState(false), 2000);
+                    }
+                });
+                textToSpeech.speak(text, TextToSpeech.QUEUE_ADD, null, utteranceId);
             } else {
-                textToSpeech.speak(text, TextToSpeech.QUEUE_ADD, null);
+                // Для версий ниже Lollipop
+                HashMap<String, String> params = new HashMap<>();
+                params.put(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId);
+                textToSpeech.setOnUtteranceCompletedListener(new TextToSpeech.OnUtteranceCompletedListener() {
+                    @Override
+                    public void onUtteranceCompleted(String utteranceId) {
+                        handler.postDelayed(() -> broadcastSpeakingState(false), 1000);
+                    }
+                });
+                textToSpeech.speak(text, TextToSpeech.QUEUE_ADD, params);
             }
         }
 
         // Показываем уведомление
         showNotificationWithText(fullText);
     }
+
+    public void stopBotSpeaking() {
+        if (textToSpeech != null) {
+            textToSpeech.stop();
+        }
+        // Заменяем setBotSpeaking на broadcastSpeakingState
+        broadcastSpeakingState(false);
+        handler.removeCallbacksAndMessages(null);
+    }
+
 
     public void showNotificationWithText(String text) {
         NotificationManager notificationManager =

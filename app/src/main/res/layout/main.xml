@@ -52,13 +52,34 @@
                 android:text="Очистить историю"/>
         </LinearLayout>
 
-        <Button
-            android:id="@+id/recognize_mic"
+        <!-- Контейнер для кнопки распознавания и выбора режима ввода -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/recognize_microphone"/>
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="8dp">
 
-        <TextView
+            <!-- Уменьшенная кнопка распознавания -->
+            <Button
+                android:id="@+id/recognize_mic"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="2"
+                android:text="@string/recognize_microphone"
+                android:layout_marginEnd="8dp"/>
+
+            <!-- Выпадающий список для выбора режима ввода -->
+            <Spinner
+                android:id="@+id/input_mode_spinner"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:entries="@array/input_modes"
+                android:spinnerMode="dropdown"/>
+        </LinearLayout>
+
+        <EditText
             android:id="@+id/result_text"
             android:layout_width="fill_parent"
             android:layout_height="0dp"
@@ -67,7 +88,83 @@
             android:scrollbars="vertical"
             android:scrollbarStyle="insideInset"
             android:textAppearance="?android:attr/textAppearanceMedium"
-            android:maxLines="1000" />
+            android:maxLines="1000"
+            android:inputType="textMultiLine"
+            android:textIsSelectable="true"
+            android:longClickable="true"
+            android:background="@android:color/transparent"
+            android:focusable="false"
+            android:focusableInTouchMode="false"
+            android:cursorVisible="false"/>
+
+        <LinearLayout
+            android:id="@+id/photo_preview_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone"
+            android:padding="8dp"
+            android:background="#f5f5f5"
+            android:layout_marginBottom="8dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Выбранное фото:"
+                android:textStyle="bold"
+                android:layout_marginBottom="4dp"/>
+
+            <ImageView
+                android:id="@+id/selected_photo_view"
+                android:layout_width="75dp"
+                android:layout_height="75dp"
+                android:scaleType="centerCrop"
+                android:background="@android:color/darker_gray"
+                android:contentDescription="Выбранное фото" />
+
+            <Button
+                android:id="@+id/remove_photo_button"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Удалить фото"
+                android:layout_marginTop="8dp"/>
+
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:padding="8dp">
+
+            <ImageButton
+                android:id="@+id/attach_button"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:src="@android:drawable/ic_menu_upload"
+                android:contentDescription="Прикрепить фото"
+                android:padding="8dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless" />
+
+            <EditText
+                android:id="@+id/message_edit_text"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="Введите сообщение"
+                android:imeOptions="actionSend"
+                android:inputType="text"
+                android:maxLines="3"
+                android:minHeight="48dp" />
+
+            <Button
+                android:id="@+id/send_button"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Отправить"
+                android:layout_marginStart="8dp"/>
+        </LinearLayout>
+
     </LinearLayout>
 
     <!-- Экран изменения данных (скрыт по умолчанию) -->
