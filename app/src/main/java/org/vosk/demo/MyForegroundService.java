@@ -1,7 +1,5 @@
 package org.vosk.demo;
 
-import static org.vosk.demo.R.*;
-
 import android.Manifest;
 import android.app.ActivityManager;
 import android.app.Notification;
@@ -13,19 +11,19 @@ import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.media.AudioAttributes;
+import android.media.AudioFormat;
 import android.media.AudioManager;
+import android.media.AudioTrack;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.provider.Settings;
-import android.speech.tts.TextToSpeech;
-import android.speech.tts.UtteranceProgressListener;
+import android.util.Base64;
 import android.util.Log;
 import android.view.KeyEvent;
-import android.view.Window;
-import android.view.WindowManager;
 import android.widget.Toast;
 
 import androidx.core.app.NotificationCompat;
@@ -35,18 +33,24 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
-import java.util.UUID;
+import java.util.concurrent.ConcurrentLinkedQueue;
+
+import android.app.usage.UsageStats;
+import android.app.usage.UsageStatsManager;
+import android.content.pm.ApplicationInfo;
 
 public class MyForegroundService extends Service {
     private static final int NOTIFICATION_ID = 123;
     private static final String CHANNEL_ID = "AssistantServiceChannel";
-    public TextToSpeech textToSpeech;
-
-    // Добавляем поле handler
     private Handler handler;
+
+    // --- Потоковое аудио ---
+    private AudioTrack audioTrack;
+    private Thread audioPlayThread;
+    private boolean isAudioThreadRunning = false;
+    private final ConcurrentLinkedQueue<byte[]> audioQueue = new ConcurrentLinkedQueue<>();
+    private final Object audioLock = new Object();
 
     public static final String ACTION_BOT_SPEAKING = "org.vosk.demo.ACTION_BOT_SPEAKING";
     public static final String EXTRA_IS_SPEAKING = "is_speaking";
@@ -61,117 +65,221 @@ public class MyForegroundService extends Service {
     public void onCreate() {
         super.onCreate();
         createNotificationChannel();
-
-        // Инициализируем handler
         handler = new Handler(Looper.getMainLooper());
-
-        textToSpeech = new TextToSpeech(this, status -> {
-            if (status == TextToSpeech.SUCCESS) {
-                int result = textToSpeech.setLanguage(Locale.getDefault());
-                if (result == TextToSpeech.LANG_MISSING_DATA ||
-                        result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                    Log.e("TTS", "Language not supported");
-                }
-            } else {
-                Log.e("TTS", "Initialization failed");
-            }
-        });
     }
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         createNotificationChannel();
         Notification notification = createNotification();
         startForeground(NOTIFICATION_ID, notification);
 
-        if (intent != null && "STOP_SPEECH".equals(intent.getAction())) {
+        if (intent == null) return START_STICKY;
+
+        String action = intent.getAction();
+
+        if ("STOP_SPEECH".equals(action)) {
             stopBotSpeaking();
             return START_STICKY;
         }
-        else if(intent != null && "SPEAK_TEXT".equals(intent.getAction())){
-            String sender = intent.getStringExtra("sender");
-            String text = intent.getStringExtra("text");
-            if (text != null) {
-                if (sender != null) {
-                    speakInBackground(sender, text);
-                } else {
-                    speakInBackground("Бот", text); // Значение по умолчанию
-                }
-            }
+
+        // 1. ПОЛУЧЕН АУДИО ЧАНК
+        if ("AUDIO_CHUNK".equals(action)) {
+            String base64 = intent.getStringExtra("audio_base64");
+            appendAudioChunk(base64);
+            return START_STICKY;
         }
 
-        if (intent != null && intent.hasExtra("command")) {
+        // 2. ПОЛУЧЕНО СООБЩЕНИЕ / КОМАНДА
+        if (intent.hasExtra("command")) {
             try {
                 String commandJson = intent.getStringExtra("command");
                 JSONObject commandMessage = new JSONObject(commandJson);
+                String type = commandMessage.optString("type");
 
-                // Обработка сообщений типа new_message
-                if ("new_message".equals(commandMessage.optString("type"))) {
+                if ("new_message".equals(type)) {
                     String sender = commandMessage.optString("sender", "Бот");
-                    JSONArray actions = commandMessage.getJSONArray("actions");
+                    String originalCommand = commandMessage.optString("original_command", "");
+                    String sourceDevice = commandMessage.optString("source_device", "");
+                    String userMsgId = commandMessage.optString("user_msg_id", "");
 
-                    // Комбинируем все голосовые ответы
-                    StringBuilder combinedVoice = new StringBuilder();
-                    for (int i = 0; i < actions.length(); i++) {
-                        String action = actions.getString(i);
-                        String[] parts = action.split("\\|", 2);
-                        if (parts.length != 2) continue;
-
-                        String actionType = parts[0].trim().toLowerCase();
-                        String actionContent = parts[1].trim();
-
-                        if ("голосовой ответ".equals(actionType)) {
-                            if (combinedVoice.length() > 0) {
-                                combinedVoice.append(" ");
-                            }
-                            combinedVoice.append(actionContent);
+                    // Вывод текста в UI
+                    String displayMessageText = commandMessage.optString("text", "").trim();
+                    if (!displayMessageText.isEmpty() && !displayMessageText.equals("[Системная команда]")) {
+                        String finalMsg = sender + ": " + displayMessageText;
+                        FridayActivity activity = FridayActivity.getInstance();
+                        if (activity != null) {
+                            activity.runOnUiThread(() -> activity.updateResultText(finalMsg + "\n"));
                         }
-                        else if ("текстовой ответ".equals(actionType)) {
-                            // Выводим текстовой ответ сразу
-                            String message = sender + ": " + actionContent;
-                            FridayActivity activity = FridayActivity.getInstance();
-                            if (activity != null) {
-                                activity.updateResultText(message + "\n");
+                        showNotificationWithText(finalMsg);
+                    }
+
+                    // Воспроизведение Native Audio
+                    if (commandMessage.has("audio_base64") && !commandMessage.isNull("audio_base64")) {
+                        String audioBase64 = commandMessage.getString("audio_base64");
+                        appendAudioChunk(audioBase64); // <--- Исправлено
+                    }
+
+                    boolean needsDataResponse = false;
+                    boolean needProcesses = false;
+                    boolean needPrograms = false;
+
+                    // Выполнение действий
+                    if (commandMessage.has("actions")) {
+                        JSONArray actions = commandMessage.getJSONArray("actions");
+                        for (int i = 0; i < actions.length(); i++) {
+                            JSONObject actionObj = actions.getJSONObject(i);
+                            String actionType = actionObj.optString("action_type", "").toLowerCase();
+                            String actionValue = actionObj.optString("action_value", "").toLowerCase();
+                            
+                            if (actionType.equals("data_request")) {
+                                needsDataResponse = true;
+                                if (actionValue.contains("process") || actionValue.contains("процесс")) needProcesses = true;
+                                if (actionValue.contains("program") || actionValue.contains("app") || actionValue.contains("прилож")) needPrograms = true;
+                            } else {
+                                processAction(actionType, actionObj.optString("action_value", ""));
                             }
-                            showNotificationWithText(message);
-                        }
-                        else {
-                            // Обработка других действий
-                            processAction(action);
                         }
                     }
 
-                    // Если есть голосовые ответы - озвучиваем их
-                    if (combinedVoice.length() > 0) {
-                        speakInBackground(sender, combinedVoice.toString());
-                    }
-                } else {
-                    // Старая обработка других команд
-                    JSONArray actions = commandMessage.getJSONArray("actions");
-                    for (int i = 0; i < actions.length(); i++) {
-                        processAction(actions.getString(i));
+                    // Сбор данных и отправка обратно (Вторичный цикл)
+                    if (needsDataResponse) {
+                        JSONArray programs = new JSONArray();
+                        JSONArray runningApps = new JSONArray();
+                        
+                        if (needProcesses) runningApps = getRunningAppsWithTitles();
+                        if (needPrograms) programs = getInstalledPackages();
+                        
+                        JSONObject response = new JSONObject();
+                        response.put("command_to_device", originalCommand);
+                        response.put("processes", runningApps.toString());
+                        response.put("programs", programs);
+                        response.put("source_name", sourceDevice);
+                        response.put("user_msg_id", userMsgId);
+                        
+                        FridayActivity activity = FridayActivity.getInstance();
+                        if (activity != null) {
+                            activity.sendEncodedMessage(response);
+                        }
                     }
                 }
             } catch (JSONException e) {
                 Log.e("CommandHandler", "Error processing command", e);
-                showToast("Ошибка выполнения команды");
             }
         }
         return START_STICKY;
     }
 
-    private void processAction(String action) {
-        String[] parts = action.split("\\|", 2);
-        if (parts.length != 2) return;
+    // --- ЛОГИКА ПОТОКОВОГО ВОСПРОИЗВЕДЕНИЯ ---
+    
+    private void appendAudioChunk(String base64Audio) {
+        if (base64Audio == null || base64Audio.isEmpty()) return;
+        
+        byte[] pcmData = Base64.decode(base64Audio, Base64.DEFAULT);
+        audioQueue.add(pcmData);
 
-        String actionType = parts[0].trim().toLowerCase();
-        String actionContent = parts[1].trim();
+        synchronized (audioLock) {
+            if (!isAudioThreadRunning) {
+                isAudioThreadRunning = true;
+                startAudioPlaybackThread();
+            }
+        }
+    }
+
+    private void startAudioPlaybackThread() {
+        audioPlayThread = new Thread(() -> {
+            try {
+                int sampleRate = 24000;
+                int channelConfig = AudioFormat.CHANNEL_OUT_MONO;
+                int audioFormat = AudioFormat.ENCODING_PCM_16BIT;
+                int bufferSize = AudioTrack.getMinBufferSize(sampleRate, channelConfig, audioFormat);
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    audioTrack = new AudioTrack.Builder()
+                            .setAudioAttributes(new AudioAttributes.Builder()
+                                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                                    .build())
+                            .setAudioFormat(new AudioFormat.Builder()
+                                    .setEncoding(audioFormat)
+                                    .setSampleRate(sampleRate)
+                                    .setChannelMask(channelConfig)
+                                    .build())
+                            .setBufferSizeInBytes(bufferSize * 4) 
+                            .setTransferMode(AudioTrack.MODE_STREAM)
+                            .build();
+                } else {
+                    audioTrack = new AudioTrack(
+                            AudioManager.STREAM_MUSIC, sampleRate, channelConfig, audioFormat,
+                            bufferSize * 4, AudioTrack.MODE_STREAM
+                    );
+                }
+
+                audioTrack.play();
+                broadcastSpeakingState(true);
+
+                int emptyPolls = 0;
+                while (isAudioThreadRunning) {
+                    byte[] chunk = audioQueue.poll();
+                    if (chunk != null) {
+                        emptyPolls = 0;
+                        audioTrack.write(chunk, 0, chunk.length);
+                    } else {
+                        emptyPolls++;
+                        try { Thread.sleep(50); } catch (Exception e) {}
+                        
+                        // Если новых чанков нет больше ~500мс -> Конец стрима по сети
+                        if (emptyPolls > 10) {
+                            break;
+                        }
+                    }
+                }
+
+                // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Ждем, пока буфер доиграет
+                if (audioTrack != null && audioTrack.getState() != AudioTrack.STATE_UNINITIALIZED) {
+                    audioTrack.stop(); // Сообщаем треку, что новых данных не будет, пусть доиграет остатки
+                    Thread.sleep(1000); // Даем ему секунду на воспроизведение последних байтов
+                }
+
+            } catch (Exception e) {
+                Log.e("AudioStream", "Error playing native audio stream", e);
+            } finally {
+                cleanupAudioTrack();
+            }
+        });
+        audioPlayThread.start();
+    }
+
+    private void cleanupAudioTrack() {
+        isAudioThreadRunning = false;
+        broadcastSpeakingState(false);
+        audioQueue.clear();
+
+        if (audioTrack != null) {
+            try {
+                audioTrack.stop();
+                audioTrack.release();
+            } catch (Exception e) {}
+            audioTrack = null;
+        }
+    }
+
+    public void stopBotSpeaking() {
+        isAudioThreadRunning = false;
+        cleanupAudioTrack();
+        handler.removeCallbacksAndMessages(null);
+    }
+
+    // --- ЛОГИКА ИСПОЛНЕНИЯ КОМАНД ---
+
+    private void processAction(String actionType, String actionContent) {
+        if (actionType == null || actionType.isEmpty()) return;
 
         switch (actionType) {
             case "голосовой ответ":
-                // Обрабатывается в onStartCommand
-                break;
             case "текстовой ответ":
-                // Обрабатывается в onStartCommand
+            case "субтитры":
+            case "data_request":
                 break;
             case "режим камеры":
                 startCameraActivity();
@@ -198,22 +306,13 @@ public class MyForegroundService extends Service {
                 closeAppByPackageName(actionContent);
                 break;
             case "музыка":
-                if (actionContent.equals("следующий трек")) {
-                    controlMediaPlayback("next");
-                } else if (actionContent.equals("предыдущий трек")) {
-                    controlMediaPlayback("previous");
-                } else if (actionContent.equals("выключить музыку")) {
-                    controlMediaPlayback("pause");
-                } else if (actionContent.equals("включить музыку")) {
-                    controlMediaPlayback("play");
-                }
-                break;
-            case "режим фото":
-                // Реализация режима фото
+                if (actionContent.equals("следующий трек")) controlMediaPlayback("next");
+                else if (actionContent.equals("предыдущий трек")) controlMediaPlayback("previous");
+                else if (actionContent.equals("выключить музыку")) controlMediaPlayback("pause");
+                else if (actionContent.equals("включить музыку")) controlMediaPlayback("play");
                 break;
             default:
                 Log.w("CommandHandler", "Unknown action type: " + actionType);
-                showToast("Ошибка выполнения команды");
         }
     }
 
@@ -224,7 +323,6 @@ public class MyForegroundService extends Service {
     }
 
     private void stopCameraActivity() {
-        // Отправляем broadcast для закрытия активности камеры
         Intent closeIntent = new Intent("CLOSE_CAMERA_ACTION");
         sendBroadcast(closeIntent);
     }
@@ -263,7 +361,6 @@ public class MyForegroundService extends Service {
             }
         } catch (Exception e) {
             Log.e("MediaControl", "Error controlling media playback", e);
-            showToast("Ошибка управления воспроизведением");
         }
     }
 
@@ -300,87 +397,15 @@ public class MyForegroundService extends Service {
             showToast("Приложение " + packageName + " было закрыто");
 
         } catch (Exception e) {
-            Log.e("AppCloser", "Error closing app: " + e.getMessage());
             showToast("Не удалось закрыть приложение " + packageName);
         }
     }
 
-    public void speakInBackground(String sender, String text) {
-        // Формируем полный текст для отображения
-        String fullText = sender + ": " + text;
-
-        // Обновляем UI через активность
-        FridayActivity activity = FridayActivity.getInstance();
-        if (activity != null) {
-            activity.runOnUiThread(() -> {
-                activity.updateResultText(fullText + "\n");
-            });
-        }
-
-
-        broadcastSpeakingState(true);
-
-        if (textToSpeech != null) {
-            // Генерируем уникальный идентификатор для высказывания
-            String utteranceId = UUID.randomUUID().toString();
-
-            // Устанавливаем слушатель для завершения речи
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                textToSpeech.setOnUtteranceProgressListener(new UtteranceProgressListener() {
-                    @Override
-                    public void onStart(String utteranceId) {
-                        // Не требуется
-                    }
-
-                    @Override
-                    public void onDone(String utteranceId) {
-                        // Когда речь закончена, ждем еще секунду и отправляем состояние
-                        handler.postDelayed(() -> broadcastSpeakingState(false), 2000);
-                    }
-
-                    @Override
-                    public void onError(String utteranceId) {
-                        // В случае ошибки также отправляем состояние
-                        handler.postDelayed(() -> broadcastSpeakingState(false), 2000);
-                    }
-                });
-                textToSpeech.speak(text, TextToSpeech.QUEUE_ADD, null, utteranceId);
-            } else {
-                // Для версий ниже Lollipop
-                HashMap<String, String> params = new HashMap<>();
-                params.put(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId);
-                textToSpeech.setOnUtteranceCompletedListener(new TextToSpeech.OnUtteranceCompletedListener() {
-                    @Override
-                    public void onUtteranceCompleted(String utteranceId) {
-                        handler.postDelayed(() -> broadcastSpeakingState(false), 1000);
-                    }
-                });
-                textToSpeech.speak(text, TextToSpeech.QUEUE_ADD, params);
-            }
-        }
-
-        // Показываем уведомление
-        showNotificationWithText(fullText);
-    }
-
-    public void stopBotSpeaking() {
-        if (textToSpeech != null) {
-            textToSpeech.stop();
-        }
-        // Заменяем setBotSpeaking на broadcastSpeakingState
-        broadcastSpeakingState(false);
-        handler.removeCallbacksAndMessages(null);
-    }
-
-
     public void showNotificationWithText(String text) {
-        NotificationManager notificationManager =
-                (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        NotificationManager notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                    != PackageManager.PERMISSION_GRANTED) {
-                Log.w("Notification", "Notification permission not granted");
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 return;
             }
         }
@@ -399,9 +424,7 @@ public class MyForegroundService extends Service {
 
         try {
             notificationManager.notify(12345, builder.build());
-        } catch (SecurityException e) {
-            Log.e("Notification", "Failed to show notification", e);
-        }
+        } catch (SecurityException e) {}
     }
 
     public void openLink(String url) {
@@ -409,7 +432,6 @@ public class MyForegroundService extends Service {
             if (!url.startsWith("http://") && !url.startsWith("https://")) {
                 url = "http://" + url;
             }
-
             Intent intent = new Intent(Intent.ACTION_VIEW);
             intent.setData(Uri.parse(url));
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -419,17 +441,10 @@ public class MyForegroundService extends Service {
                 startActivity(intent);
             } else {
                 showToast("Не найдено приложение для открытия ссылки");
-                Intent browserIntent = new Intent(Intent.ACTION_VIEW,
-                        Uri.parse("http://www.google.com"));
-                if (browserIntent.resolveActivity(pm) != null) {
-                    startActivity(browserIntent);
-                }
+                Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("http://www.google.com"));
+                if (browserIntent.resolveActivity(pm) != null) startActivity(browserIntent);
             }
-        } catch (ActivityNotFoundException e) {
-            Log.e("Service", "No activity to handle link", e);
-            showToast("Не удалось открыть ссылку: " + e.getMessage());
         } catch (Exception e) {
-            Log.e("Service", "Error opening link", e);
             showToast("Ошибка при открытии ссылки");
         }
     }
@@ -437,21 +452,10 @@ public class MyForegroundService extends Service {
     public void openAppInBackground(String packageName) {
         try {
             PackageManager pm = getPackageManager();
-
             Intent launchIntent = pm.getLaunchIntentForPackage(packageName);
             if (launchIntent != null) {
                 launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 startActivity(launchIntent);
-                return;
-            }
-
-            Intent intent = pm.getLaunchIntentForPackage(packageName);
-            if (intent == null) {
-                intent = pm.getLeanbackLaunchIntentForPackage(packageName);
-            }
-            if (intent != null) {
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(intent);
                 return;
             }
 
@@ -460,11 +464,7 @@ public class MyForegroundService extends Service {
             settingsIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(settingsIntent);
 
-        } catch (ActivityNotFoundException e) {
-            Log.e("Service", "App not found", e);
-            showToast("Приложение не найдено: " + packageName);
         } catch (Exception e) {
-            Log.e("Service", "Error opening app", e);
             showToast("Не удалось открыть приложение");
         }
     }
@@ -472,36 +472,17 @@ public class MyForegroundService extends Service {
     public void changeVolumeInBackground(String volumePercent) {
         try {
             AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-            if (audioManager == null) {
-                showToast("Не удалось получить доступ к аудио менеджеру");
-                return;
-            }
+            if (audioManager == null) return;
 
             int percent = Integer.parseInt(volumePercent.replaceAll("[^0-9]", ""));
             percent = Math.max(0, Math.min(100, percent));
 
-            // Устанавливаем громкость только для медиа (STREAM_MUSIC)
             int maxMusic = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
             int targetMusic = (int) (maxMusic * (percent / 100.0));
             audioManager.setStreamVolume(
-                    AudioManager.STREAM_MUSIC,
-                    targetMusic,
-                    AudioManager.FLAG_SHOW_UI | AudioManager.FLAG_PLAY_SOUND
+                    AudioManager.STREAM_MUSIC, targetMusic, AudioManager.FLAG_SHOW_UI | AudioManager.FLAG_PLAY_SOUND
             );
-
-            audioManager.requestAudioFocus(
-                    null,
-                    AudioManager.STREAM_MUSIC,
-                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
-            );
-
-        } catch (NumberFormatException e) {
-            Log.e("Service", "Invalid volume percentage", e);
-            showToast("Некорректное значение громкости");
-        } catch (Exception e) {
-            Log.e("Service", "Error changing volume", e);
-            showToast("Ошибка изменения громкости: " + e.getMessage());
-        }
+        } catch (Exception e) {}
     }
 
     public void changeBrightnessInBackground(String brightnessPercent) {
@@ -512,7 +493,6 @@ public class MyForegroundService extends Service {
                     intent.setData(Uri.parse("package:" + getPackageName()));
                     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                     startActivity(intent);
-                    showToast("Пожалуйста, предоставьте разрешение на изменение яркости");
                     return;
                 }
             }
@@ -521,25 +501,8 @@ public class MyForegroundService extends Service {
             percent = Math.max(0, Math.min(100, percent));
             int brightness = (int) (255 * percent / 100.0);
 
-            Settings.System.putInt(
-                    getContentResolver(),
-                    Settings.System.SCREEN_BRIGHTNESS,
-                    brightness
-            );
-
-            FridayActivity activity = FridayActivity.getInstance();
-            if (activity != null) {
-                Window window = activity.getWindow();
-                if (window != null) {
-                    WindowManager.LayoutParams layoutParams = window.getAttributes();
-                    layoutParams.screenBrightness = brightness / 255.0f;
-                    window.setAttributes(layoutParams);
-                }
-            }
-        } catch (Exception e) {
-            Log.e("Service", "Error changing brightness", e);
-            showToast("Ошибка изменения яркости");
-        }
+            Settings.System.putInt(getContentResolver(), Settings.System.SCREEN_BRIGHTNESS, brightness);
+        } catch (Exception e) {}
     }
 
     private void showToast(final String message) {
@@ -573,18 +536,52 @@ public class MyForegroundService extends Service {
     }
 
     @Override
-    public IBinder onBind(Intent intent) {
-        return null;
-    }
+    public IBinder onBind(Intent intent) { return null; }
 
     @Override
     public void onDestroy() {
         super.onDestroy();
-        if (textToSpeech != null) {
-            textToSpeech.stop();
-            textToSpeech.shutdown();
-        }
+        stopBotSpeaking();
         stopForeground(true);
         stopSelf();
+    }
+
+    public JSONArray getInstalledPackages() {
+        JSONArray programs = new JSONArray();
+        try {
+            PackageManager pm = getPackageManager();
+            List<ApplicationInfo> packages = pm.getInstalledApplications(PackageManager.GET_META_DATA);
+            for (ApplicationInfo packageInfo : packages) {
+                if ((packageInfo.flags & ApplicationInfo.FLAG_SYSTEM) == 0) {
+                    programs.put(packageInfo.packageName);
+                }
+            }
+        } catch (Exception e) {}
+        return programs;
+    }
+
+    private JSONArray getRunningAppsWithTitles() {
+        JSONArray runningApps = new JSONArray();
+        ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+        PackageManager pm = getPackageManager();
+
+        List<ActivityManager.RunningAppProcessInfo> runningProcesses = am.getRunningAppProcesses();
+        if (runningProcesses != null) {
+            for (ActivityManager.RunningAppProcessInfo processInfo : runningProcesses) {
+                if (processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
+                        processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE) {
+                    for (String pkg : processInfo.pkgList) {
+                        try {
+                            ApplicationInfo appInfo = pm.getApplicationInfo(pkg, 0);
+                            String appName = pm.getApplicationLabel(appInfo).toString();
+                            if ((appInfo.flags & ApplicationInfo.FLAG_SYSTEM) == 0) {
+                                runningApps.put(appName + " (" + pkg + ")");
+                            }
+                        } catch (PackageManager.NameNotFoundException e) {}
+                    }
+                }
+            }
+        }
+        return runningApps;
     }
 }
