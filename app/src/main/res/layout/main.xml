@@ -1,338 +1,594 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="fill_parent"
-    android:layout_height="fill_parent"
     xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="16dp">
+    android:background="@color/bg_dark">
 
-    <!-- Основной экран (по умолчанию видимый) -->
+    <!-- ========== MAIN CONTENT ========== -->
     <LinearLayout
         android:id="@+id/main_content"
-        android:layout_width="fill_parent"
+        android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:orientation="vertical">
+        android:orientation="vertical"
+        android:visibility="visible">
 
+        <!-- Header -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center">
+            android:orientation="vertical"
+            android:background="@drawable/header_background"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingTop="12dp"
+            android:paddingBottom="12dp">
 
-            <Button
-                android:id="@+id/btn_register"
-                android:layout_width="0dp"
+            <!-- Auth row: register/login buttons or user profile -->
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Регистрация"
-                android:visibility="gone"/>
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
 
-            <Button
-                android:id="@+id/btn_login"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Вход"
-                android:visibility="gone"/>
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Friday"
+                    android:textColor="@color/text_primary"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
 
-            <Button
-                android:id="@+id/btn_user_profile"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text=""
-                android:visibility="gone"/>
+                <Button
+                    android:id="@+id/btn_register"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:text="Регистрация"
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:background="@drawable/button_background"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:visibility="gone"
+                    android:layout_marginEnd="8dp" />
 
-            <Button
-                android:id="@+id/clear_history"
-                android:layout_width="0dp"
+                <Button
+                    android:id="@+id/btn_login"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:text="Войти"
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:background="@drawable/button_background"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:visibility="gone" />
+
+                <Button
+                    android:id="@+id/btn_user_profile"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:background="@drawable/button_background"
+                    android:paddingStart="12dp"
+                    android:paddingEnd="12dp"
+                    android:visibility="gone" />
+            </LinearLayout>
+
+            <!-- Dialog selector row (only for logged-in users) -->
+            <LinearLayout
+                android:id="@+id/dialogs_layout"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Очистить историю"/>
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:visibility="gone"
+                android:layout_marginTop="8dp">
+
+                <Spinner
+                    android:id="@+id/dialog_spinner"
+                    android:layout_width="0dp"
+                    android:layout_height="36dp"
+                    android:layout_weight="1"
+                    android:spinnerMode="dropdown"
+                    android:popupBackground="@color/bg_surface" />
+
+                <ImageButton
+                    android:id="@+id/btn_new_dialog"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:src="@android:drawable/ic_input_add"
+                    android:contentDescription="Новый чат"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:tint="@color/accent_primary"
+                    android:layout_marginStart="8dp" />
+
+                <ImageButton
+                    android:id="@+id/btn_delete_dialog"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:src="@android:drawable/ic_delete"
+                    android:contentDescription="Удалить чат"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:tint="@color/offline_red"
+                    android:layout_marginStart="4dp" />
+            </LinearLayout>
         </LinearLayout>
 
-        <!-- Контейнер для кнопки распознавания и выбора режима ввода -->
-        <LinearLayout
+        <!-- Divider -->
+        <View
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:layout_marginBottom="8dp">
+            android:layout_height="1dp"
+            android:background="@color/divider" />
 
-            <!-- Уменьшенная кнопка распознавания -->
-            <Button
-                android:id="@+id/recognize_mic"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="2"
-                android:text="@string/recognize_microphone"
-                android:layout_marginEnd="8dp"/>
-
-            <!-- Выпадающий список для выбора режима ввода -->
-            <Spinner
-                android:id="@+id/input_mode_spinner"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:entries="@array/input_modes"
-                android:spinnerMode="dropdown"/>
-        </LinearLayout>
-
-        <EditText
-            android:id="@+id/result_text"
-            android:layout_width="fill_parent"
+        <!-- Chat RecyclerView -->
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/chat_recycler_view"
+            android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
-            android:gravity="top"
-            android:scrollbars="vertical"
-            android:scrollbarStyle="insideInset"
-            android:textAppearance="?android:attr/textAppearanceMedium"
-            android:maxLines="1000"
-            android:inputType="textMultiLine"
-            android:textIsSelectable="true"
-            android:longClickable="true"
-            android:background="@android:color/transparent"
-            android:focusable="false"
-            android:focusableInTouchMode="false"
-            android:cursorVisible="false"/>
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:clipToPadding="false"
+            android:scrollbars="none"
+            tools:ignore="MissingClass" />
 
+        <!-- Status / Mic indicator row -->
+        <TextView
+            android:id="@+id/tv_mic_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/mic_idle"
+            android:textColor="@color/text_hint"
+            android:textSize="12sp"
+            android:gravity="center"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:visibility="gone" />
+
+        <!-- Photo preview -->
         <LinearLayout
             android:id="@+id/photo_preview_container"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
+            android:orientation="horizontal"
             android:visibility="gone"
             android:padding="8dp"
-            android:background="#f5f5f5"
-            android:layout_marginBottom="8dp">
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Выбранное фото:"
-                android:textStyle="bold"
-                android:layout_marginBottom="4dp"/>
+            android:gravity="center_vertical"
+            android:background="@color/bg_surface">
 
             <ImageView
                 android:id="@+id/selected_photo_view"
-                android:layout_width="75dp"
-                android:layout_height="75dp"
+                android:layout_width="56dp"
+                android:layout_height="56dp"
                 android:scaleType="centerCrop"
-                android:background="@android:color/darker_gray"
                 android:contentDescription="Выбранное фото" />
 
-            <Button
-                android:id="@+id/remove_photo_button"
-                android:layout_width="wrap_content"
+            <TextView
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:text="Удалить фото"
-                android:layout_marginTop="8dp"/>
+                android:layout_weight="1"
+                android:text="Фото прикреплено"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp"
+                android:paddingStart="8dp" />
 
+            <ImageButton
+                android:id="@+id/remove_photo_button"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:src="@android:drawable/ic_menu_close_clear_cancel"
+                android:contentDescription="Удалить фото"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:tint="@color/text_secondary" />
         </LinearLayout>
 
+        <!-- Input row -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:padding="8dp">
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="12dp"
+            android:background="@color/bg_surface"
+            android:gravity="center_vertical">
 
+            <!-- Clear history (only for guests) -->
+            <ImageButton
+                android:id="@+id/btn_clear_history"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:src="@android:drawable/ic_menu_delete"
+                android:contentDescription="Очистить историю"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:tint="@color/text_secondary"
+                android:visibility="gone"
+                android:layout_marginEnd="4dp" />
+
+            <!-- Attach photo -->
             <ImageButton
                 android:id="@+id/attach_button"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
                 android:src="@android:drawable/ic_menu_upload"
                 android:contentDescription="Прикрепить фото"
-                android:padding="8dp"
-                android:background="?android:attr/selectableItemBackgroundBorderless" />
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:tint="@color/accent_primary"
+                android:layout_marginEnd="4dp" />
 
+            <!-- Text input -->
             <EditText
                 android:id="@+id/message_edit_text"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:hint="Введите сообщение"
+                android:hint="Введите сообщение..."
+                android:textColorHint="@color/text_hint"
+                android:textColor="@color/text_primary"
+                android:textSize="15sp"
+                android:background="@drawable/input_background"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:paddingTop="10dp"
+                android:paddingBottom="10dp"
                 android:imeOptions="actionSend"
                 android:inputType="text"
-                android:maxLines="3"
-                android:minHeight="48dp" />
+                android:maxLines="4" />
 
-            <Button
+            <!-- Send button -->
+            <ImageButton
                 android:id="@+id/send_button"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Отправить"
-                android:layout_marginStart="8dp"/>
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:src="@android:drawable/ic_menu_send"
+                android:contentDescription="Отправить"
+                android:background="@drawable/mic_button_idle"
+                android:tint="@color/text_primary"
+                android:layout_marginStart="8dp" />
+
+            <!-- Mic button -->
+            <ImageButton
+                android:id="@+id/recognize_mic"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:src="@android:drawable/stat_sys_phone_call"
+                android:contentDescription="Голосовой ввод"
+                android:background="@drawable/mic_button_idle"
+                android:tint="@color/text_primary"
+                android:layout_marginStart="8dp" />
+
         </LinearLayout>
 
     </LinearLayout>
 
-    <!-- Экран изменения данных (скрыт по умолчанию) -->
-    <LinearLayout
+    <!-- ========== CHANGE DATA CONTENT ========== -->
+    <ScrollView
         android:id="@+id/change_data_content"
-        android:layout_width="fill_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:orientation="vertical"
-        android:visibility="gone">
-
-        <EditText
-            android:id="@+id/deviceNameChange"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:minHeight="48dp"
-            android:hint="@string/deviceName" />
-
-        <EditText
-            android:id="@+id/passwordChange"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="@string/devicePassword"
-            android:inputType="textPassword"
-            android:minHeight="48dp"
-            tools:ignore="LabelFor" />
-
-        <Button
-            android:id="@+id/change_data"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/change_data"/>
-    </LinearLayout>
-
-    <!-- Экран устройств (скрыт по умолчанию) -->
-    <ScrollView android:id="@+id/devices_content"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
         android:fillViewport="true"
-        android:visibility="gone">
+        android:visibility="gone"
+        android:background="@color/bg_dark">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:padding="16dp">
+            android:padding="20dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Данные устройства"
+                android:textColor="@color/text_primary"
+                android:textSize="22sp"
+                android:textStyle="bold"
+                android:layout_marginBottom="24dp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Имя устройства"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp"
+                android:layout_marginBottom="6dp" />
+
+            <EditText
+                android:id="@+id/deviceNameChange"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="52dp"
+                android:hint="@string/deviceName"
+                android:textColorHint="@color/text_hint"
+                android:textColor="@color/text_primary"
+                android:background="@drawable/input_background"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:paddingTop="12dp"
+                android:paddingBottom="12dp"
+                android:layout_marginBottom="16dp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Пароль"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp"
+                android:layout_marginBottom="6dp" />
+
+            <EditText
+                android:id="@+id/passwordChange"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="@string/devicePassword"
+                android:textColorHint="@color/text_hint"
+                android:textColor="@color/text_primary"
+                android:inputType="textPassword"
+                android:minHeight="52dp"
+                android:background="@drawable/input_background"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:paddingTop="12dp"
+                android:paddingBottom="12dp"
+                android:layout_marginBottom="24dp" />
+
+            <Button
+                android:id="@+id/change_data"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:text="Сохранить"
+                android:textColor="@color/text_primary"
+                android:textSize="16sp"
+                android:background="@drawable/button_background" />
+
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- ========== DEVICES CONTENT ========== -->
+    <ScrollView
+        android:id="@+id/devices_content"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true"
+        android:visibility="gone"
+        android:background="@color/bg_dark">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="20dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Устройства"
+                android:textColor="@color/text_primary"
+                android:textSize="22sp"
+                android:textStyle="bold"
+                android:layout_marginBottom="16dp" />
 
             <Button
                 android:id="@+id/btn_connect_device"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                android:layout_height="52dp"
                 android:text="Подключить устройство"
-                android:layout_marginBottom="16dp"/>
+                android:textColor="@color/text_primary"
+                android:background="@drawable/button_background"
+                android:layout_marginBottom="24dp" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="Устройства аккаунта"
-                android:textSize="18sp"
-                android:layout_marginBottom="8dp"/>
+                android:textColor="@color/text_secondary"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:layout_marginBottom="8dp" />
 
             <LinearLayout
                 android:id="@+id/account_devices_container"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:layout_marginBottom="16dp">
-                <!-- Сюда будут добавляться устройства аккаунта -->
-            </LinearLayout>
+                android:layout_marginBottom="24dp" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Подключенные устройства"
-                android:textSize="18sp"
-                android:layout_marginBottom="8dp"/>
+                android:text="Подключённые устройства"
+                android:textColor="@color/text_secondary"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:layout_marginBottom="8dp" />
 
             <LinearLayout
                 android:id="@+id/connected_devices_container"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="vertical">
-                <!-- Сюда будут добавляться подключенные устройства -->
-            </LinearLayout>
+                android:orientation="vertical" />
 
         </LinearLayout>
     </ScrollView>
-    <!-- Экран настроек (скрыт по умолчанию) -->
+
+    <!-- ========== SETTINGS CONTENT ========== -->
     <ScrollView
         android:id="@+id/settings_content"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
         android:fillViewport="true"
-        android:visibility="gone">
+        android:visibility="gone"
+        android:background="@color/bg_dark">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:padding="16dp">
+            android:padding="20dp">
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Имя бота"
-                android:textSize="18sp"
-                android:layout_marginBottom="8dp"/>
+                android:text="Настройки"
+                android:textColor="@color/text_primary"
+                android:textSize="22sp"
+                android:textStyle="bold"
+                android:layout_marginBottom="24dp" />
 
-            <EditText
-                android:id="@+id/bot_name_input"
+            <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:minHeight="48dp"
-                android:hint="Введите имя бота"/>
+                android:text="Голос ассистента"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp"
+                android:layout_marginBottom="8dp" />
+
+            <Spinner
+                android:id="@+id/bot_voice_spinner"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:entries="@array/bot_voices"
+                android:spinnerMode="dropdown"
+                android:background="@drawable/input_background"
+                android:paddingStart="12dp"
+                android:popupBackground="@color/bg_surface" />
 
             <Button
-                android:id="@+id/save_bot_name_btn"
+                android:id="@+id/save_bot_voice_btn"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Подтвердить"
-                android:layout_marginTop="16dp"/>
+                android:layout_height="52dp"
+                android:text="Сохранить настройки"
+                android:textColor="@color/text_primary"
+                android:textSize="16sp"
+                android:background="@drawable/button_background"
+                android:layout_marginTop="20dp" />
 
         </LinearLayout>
     </ScrollView>
 
-    <!-- Нижняя панель кнопок -->
+    <!-- ========== BOTTOM NAV ========== -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:weightSum="4">
+        android:background="@drawable/nav_background"
+        android:weightSum="4"
+        android:paddingTop="4dp"
+        android:paddingBottom="8dp">
 
-        <Button
-            android:id="@+id/main_btn"
+        <LinearLayout
+            android:id="@+id/nav_main"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="@string/main"
-            android:maxLines="1"
-            android:ellipsize="end"/>
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="8dp">
+            <ImageButton
+                android:id="@+id/main_btn_icon"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:src="@android:drawable/ic_dialog_map"
+                android:background="@android:color/transparent"
+                android:tint="@color/accent_primary"
+                android:contentDescription="Чат" />
+            <TextView
+                android:id="@+id/main_btn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/main"
+                android:textColor="@color/accent_primary"
+                android:textSize="11sp"
+                android:layout_marginTop="2dp" />
+        </LinearLayout>
 
-        <Button
-            android:id="@+id/data_window_btn"
+        <LinearLayout
+            android:id="@+id/nav_data"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="@string/change_data"
-            android:maxLines="1"
-            android:ellipsize="end"/>
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="8dp">
+            <ImageButton
+                android:id="@+id/data_window_btn_icon"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:src="@android:drawable/ic_menu_edit"
+                android:background="@android:color/transparent"
+                android:tint="@color/nav_unselected"
+                android:contentDescription="Устройство" />
+            <TextView
+                android:id="@+id/data_window_btn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/change_data"
+                android:textColor="@color/nav_unselected"
+                android:textSize="11sp"
+                android:layout_marginTop="2dp" />
+        </LinearLayout>
 
-        <Button
-            android:id="@+id/devices_btn"
+        <LinearLayout
+            android:id="@+id/nav_devices"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="@string/devices"
-            android:maxLines="1"
-            android:ellipsize="end"/>
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="8dp">
+            <ImageButton
+                android:id="@+id/devices_btn_icon"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:src="@android:drawable/stat_sys_phone_call"
+                android:background="@android:color/transparent"
+                android:tint="@color/nav_unselected"
+                android:contentDescription="Связь" />
+            <TextView
+                android:id="@+id/devices_btn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/devices"
+                android:textColor="@color/nav_unselected"
+                android:textSize="11sp"
+                android:layout_marginTop="2dp" />
+        </LinearLayout>
 
-        <Button
-            android:id="@+id/settings_btn"
+        <LinearLayout
+            android:id="@+id/nav_settings"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="@string/settings"
-            android:maxLines="1"
-            android:ellipsize="end"/>
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="8dp">
+            <ImageButton
+                android:id="@+id/settings_btn_icon"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:src="@android:drawable/ic_menu_preferences"
+                android:background="@android:color/transparent"
+                android:tint="@color/nav_unselected"
+                android:contentDescription="Настройки" />
+            <TextView
+                android:id="@+id/settings_btn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/settings"
+                android:textColor="@color/nav_unselected"
+                android:textSize="11sp"
+                android:layout_marginTop="2dp" />
+        </LinearLayout>
+
     </LinearLayout>
+
 </LinearLayout>

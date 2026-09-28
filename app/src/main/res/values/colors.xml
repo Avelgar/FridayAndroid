@@ -1,3 +1,37 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Dark Background -->
+    <color name="bg_dark">#0F0F1A</color>
+    <color name="bg_surface">#1A1A2E</color>
+    <color name="bg_card">#16213E</color>
+
+    <!-- Accent -->
+    <color name="accent_primary">#7C4DFF</color>
+    <color name="accent_secondary">#E040FB</color>
+    <color name="accent_glow">#5C35CC</color>
+
+    <!-- Chat bubbles -->
+    <color name="bubble_user">#7C4DFF</color>
+    <color name="bubble_user_dark">#5C35CC</color>
+    <color name="bubble_bot">#1E1E3A</color>
+    <color name="bubble_bot_border">#2A2A50</color>
+
+    <!-- Text -->
+    <color name="text_primary">#F0F0FF</color>
+    <color name="text_secondary">#9090BB</color>
+    <color name="text_hint">#55556A</color>
+
+    <!-- Status -->
+    <color name="status_listening">#4CAF50</color>
+    <color name="status_transcribing">#FF9800</color>
+    <color name="status_responding">#7C4DFF</color>
+
+    <!-- UI elements -->
+    <color name="input_bg">#1E1E38</color>
+    <color name="divider">#252545</color>
+    <color name="online_green">#4CAF50</color>
+    <color name="offline_red">#F44336</color>
+    <color name="nav_bg">#12122A</color>
+    <color name="nav_selected">#7C4DFF</color>
+    <color name="nav_unselected">#55556A</color>
 </resources>

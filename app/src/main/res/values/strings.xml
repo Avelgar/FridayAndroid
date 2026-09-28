@@ -1,27 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-
     <string name="app_name">Friday</string>
     <string name="recognize_file">Recognize File</string>
-    <string name="recognize_microphone">Recognize Microphone</string>
-    <string name="stop_microphone">Stop Microphone</string>
-    <string name="preparing">Preparing the recognizer\n</string>
-    <string name="ready">Ready\n</string>
-    <string name="failed">Failed to init recognizer %s\n</string>
-    <string name="starting">Starting\n</string>
-    <string name="say_something">Say something\n</string>
+    <string name="recognize_microphone">Микрофон</string>
+    <string name="stop_microphone">Остановить</string>
+    <string name="preparing">Подготовка микрофона\n</string>
+    <string name="ready">Готов к работе\n</string>
+    <string name="failed">Ошибка инициализации %s\n</string>
+    <string name="starting">Запуск\n</string>
+    <string name="say_something">Говорите...\n</string>
     <string name="stop_file">Stop File</string>
     <string name="pause">Pause</string>
     <string name="continueRecognition">Continue</string>
-    <string name="deviceName">Device Name</string>
-    <string name="devicePassword">Device Password</string>
-    <string name="Registration">Registration</string>
-    <string name="main">Main</string>
-    <string name="change_data">Change Data</string>
-    <string name="devices">Devices</string>
-    <string name="settings">Settings</string>
-    <array name="input_modes">
-        <item>Имя + команда</item>
-        <item>Разговорный режим</item>
+    <string name="deviceName">Имя устройства</string>
+    <string name="devicePassword">Пароль устройства</string>
+    <string name="Registration">Регистрация</string>
+    <string name="main">Чат</string>
+    <string name="change_data">Устройство</string>
+    <string name="devices">Связь</string>
+    <string name="settings">Настройки</string>
+    <string name="mic_listening">🎙️ Слушаю...</string>
+    <string name="mic_transcribing">⏳ Транскрибирую...</string>
+    <string name="mic_idle">Нажмите для разговора</string>
+    <array name="bot_voices">
+        <item>Aoede (Женский)</item>
+        <item>Puck (Мужской)</item>
+        <item>Kore (Строгий)</item>
+        <item>Charon (Эксперт)</item>
     </array>
 </resources>

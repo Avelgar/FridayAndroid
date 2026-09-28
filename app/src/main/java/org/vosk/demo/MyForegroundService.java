@@ -281,15 +281,6 @@ public class MyForegroundService extends Service {
             case "субтитры":
             case "data_request":
                 break;
-            case "режим камеры":
-                startCameraActivity();
-                break;
-            case "выключить режим камеры":
-                stopCameraActivity();
-                break;
-            case "очистка истории":
-                FridayActivity.clearHistory();
-                break;
             case "открытие ссылки":
                 openLink(actionContent);
                 break;
@@ -316,16 +307,7 @@ public class MyForegroundService extends Service {
         }
     }
 
-    private void startCameraActivity() {
-        Intent cameraIntent = new Intent(this, CameraActivity.class);
-        cameraIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        startActivity(cameraIntent);
-    }
 
-    private void stopCameraActivity() {
-        Intent closeIntent = new Intent("CLOSE_CAMERA_ACTION");
-        sendBroadcast(closeIntent);
-    }
 
     public void controlMediaPlayback(String action) {
         try {
