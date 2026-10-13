@@ -33,14 +33,44 @@
                 android:orientation="horizontal"
                 android:gravity="center_vertical">
 
-                <TextView
+                <LinearLayout
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="Friday"
-                    android:textColor="@color/text_primary"
-                    android:textSize="20sp"
-                    android:textStyle="bold" />
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+
+                    <ImageView
+                        android:id="@+id/app_logo"
+                        android:layout_width="36dp"
+                        android:layout_height="36dp"
+                        android:src="@drawable/logo"
+                        android:contentDescription="Логотип"
+                        android:layout_marginEnd="10dp" />
+
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Пятница"
+                            android:textColor="@color/graphite"
+                            android:textSize="18sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="ГОЛОСОВОЙ ПОМОЩНИК"
+                            android:textColor="@color/muted_light"
+                            android:textSize="9sp"
+                            android:textStyle="bold"
+                            android:letterSpacing="0.08" />
+                    </LinearLayout>
+                </LinearLayout>
 
                 <Button
                     android:id="@+id/btn_register"
@@ -249,7 +279,7 @@
                 android:src="@android:drawable/ic_menu_send"
                 android:contentDescription="Отправить"
                 android:background="@drawable/mic_button_idle"
-                android:tint="@color/text_primary"
+                android:tint="@color/white"
                 android:layout_marginStart="8dp" />
 
             <!-- Mic button -->
@@ -260,7 +290,7 @@
                 android:src="@android:drawable/stat_sys_phone_call"
                 android:contentDescription="Голосовой ввод"
                 android:background="@drawable/mic_button_idle"
-                android:tint="@color/text_primary"
+                android:tint="@color/white"
                 android:layout_marginStart="8dp" />
 
         </LinearLayout>
@@ -478,53 +508,54 @@
     <!-- ========== BOTTOM NAV ========== -->
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="56dp"
         android:orientation="horizontal"
         android:background="@drawable/nav_background"
-        android:weightSum="4"
-        android:paddingTop="4dp"
-        android:paddingBottom="8dp">
+        android:weightSum="4">
 
         <LinearLayout
             android:id="@+id/nav_main"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
+            android:layout_height="match_parent"
             android:layout_weight="1"
             android:orientation="vertical"
             android:gravity="center"
-            android:padding="8dp">
-            <ImageButton
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?android:attr/selectableItemBackground">
+            <ImageView
                 android:id="@+id/main_btn_icon"
-                android:layout_width="24dp"
-                android:layout_height="24dp"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
                 android:src="@android:drawable/ic_dialog_map"
-                android:background="@android:color/transparent"
-                android:tint="@color/accent_primary"
+                android:tint="@color/nav_selected"
                 android:contentDescription="Чат" />
             <TextView
                 android:id="@+id/main_btn"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/main"
-                android:textColor="@color/accent_primary"
-                android:textSize="11sp"
+                android:textColor="@color/nav_selected"
+                android:textSize="10sp"
+                android:textStyle="bold"
                 android:layout_marginTop="2dp" />
         </LinearLayout>
 
         <LinearLayout
             android:id="@+id/nav_data"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
+            android:layout_height="match_parent"
             android:layout_weight="1"
             android:orientation="vertical"
             android:gravity="center"
-            android:padding="8dp">
-            <ImageButton
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?android:attr/selectableItemBackground">
+            <ImageView
                 android:id="@+id/data_window_btn_icon"
-                android:layout_width="24dp"
-                android:layout_height="24dp"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
                 android:src="@android:drawable/ic_menu_edit"
-                android:background="@android:color/transparent"
                 android:tint="@color/nav_unselected"
                 android:contentDescription="Устройство" />
             <TextView
@@ -533,24 +564,26 @@
                 android:layout_height="wrap_content"
                 android:text="@string/change_data"
                 android:textColor="@color/nav_unselected"
-                android:textSize="11sp"
+                android:textSize="10sp"
+                android:textStyle="bold"
                 android:layout_marginTop="2dp" />
         </LinearLayout>
 
         <LinearLayout
             android:id="@+id/nav_devices"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
+            android:layout_height="match_parent"
             android:layout_weight="1"
             android:orientation="vertical"
             android:gravity="center"
-            android:padding="8dp">
-            <ImageButton
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?android:attr/selectableItemBackground">
+            <ImageView
                 android:id="@+id/devices_btn_icon"
-                android:layout_width="24dp"
-                android:layout_height="24dp"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
                 android:src="@android:drawable/stat_sys_phone_call"
-                android:background="@android:color/transparent"
                 android:tint="@color/nav_unselected"
                 android:contentDescription="Связь" />
             <TextView
@@ -559,24 +592,26 @@
                 android:layout_height="wrap_content"
                 android:text="@string/devices"
                 android:textColor="@color/nav_unselected"
-                android:textSize="11sp"
+                android:textSize="10sp"
+                android:textStyle="bold"
                 android:layout_marginTop="2dp" />
         </LinearLayout>
 
         <LinearLayout
             android:id="@+id/nav_settings"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
+            android:layout_height="match_parent"
             android:layout_weight="1"
             android:orientation="vertical"
             android:gravity="center"
-            android:padding="8dp">
-            <ImageButton
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?android:attr/selectableItemBackground">
+            <ImageView
                 android:id="@+id/settings_btn_icon"
-                android:layout_width="24dp"
-                android:layout_height="24dp"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
                 android:src="@android:drawable/ic_menu_preferences"
-                android:background="@android:color/transparent"
                 android:tint="@color/nav_unselected"
                 android:contentDescription="Настройки" />
             <TextView
@@ -585,7 +620,8 @@
                 android:layout_height="wrap_content"
                 android:text="@string/settings"
                 android:textColor="@color/nav_unselected"
-                android:textSize="11sp"
+                android:textSize="10sp"
+                android:textStyle="bold"
                 android:layout_marginTop="2dp" />
         </LinearLayout>
 

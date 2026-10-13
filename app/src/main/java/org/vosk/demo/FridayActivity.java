@@ -121,13 +121,24 @@ public class FridayActivity extends Activity {
     private Uri selectedImageUri = null;
     private Bitmap selectedImageBitmap = null;
 
-    // --- Audio Streaming (AudioRecord) ---
+    // --- Audio Streaming with continuous VAD ---
     private AudioRecord audioRecord;
-    private boolean isRecording = false;
+    private boolean isRecording = false; // whether recording loop thread is actively capturing
+    private boolean isMicModeActive = false; // whether user turned microphone mode ON with button
+    private String vadState = "idle"; // "idle", "recording", "processing"
     private Thread recordingThread = null;
     private String currentStreamId = null;
     private ChatMessage currentVoiceUserMessage = null;
     private ChatMessage currentBotResponseMsg = null;
+    private long lastBotSpeakingTime = 0;
+
+    // VAD constants (16kHz 16-bit mono PCM: 1 sec = 16000 samples)
+    private static final double VAD_THRESHOLD = 800.0; // amplitude threshold for voice activity
+    private static final int SILENCE_FRAMES_LIMIT = 24000; // 1.5 seconds of silence (16000 * 1.5)
+    private static final int PRE_BUFFER_LIMIT = 8000; // 0.5s pre-buffer
+    private final List<Short> preBuffer = new ArrayList<>();
+    private final List<Short> pcmBuffer = new ArrayList<>();
+    private int silenceSamples = 0;
 
     // --- Multi-Dialogs ---
     public static class DialogItem {
@@ -173,6 +184,15 @@ public class FridayActivity extends Activity {
             public void onReceive(Context context, Intent intent) {
                 if (MyForegroundService.ACTION_BOT_SPEAKING.equals(intent.getAction())) {
                     isBotSpeaking = intent.getBooleanExtra(MyForegroundService.EXTRA_IS_SPEAKING, false);
+                    if (!isBotSpeaking) {
+                        lastBotSpeakingTime = System.currentTimeMillis();
+                        if (isMicModeActive && "processing".equals(vadState)) {
+                            vadState = "idle";
+                            runOnUiThread(() -> {
+                                if (micStatusText != null) micStatusText.setText("Слушаю...");
+                            });
+                        }
+                    }
                 }
             }
         };
@@ -368,7 +388,7 @@ public class FridayActivity extends Activity {
                     return;
                 }
 
-                if ("transcription".equals(msgType) || "recognized_text".equals(msgType)) {
+                if ("transcription".equals(msgType) || "recognized_text".equals(msgType) || "user_transcription".equals(msgType)) {
                     String transcribedText = jsonMessage.optString("text", "");
                     String targetUiId = jsonMessage.optString("ui_msg_id", "");
                     updateVoiceUserMessage(targetUiId, transcribedText);
@@ -380,6 +400,13 @@ public class FridayActivity extends Activity {
                     return;
                 }
 
+                if ("delete_message".equals(msgType)) {
+                    if (isMicModeActive) {
+                        vadState = "idle";
+                    }
+                    return;
+                }
+
                 if ("new_message".equals(msgType)) {
                     executeInBackground(jsonMessage);
                     return;
@@ -388,7 +415,7 @@ public class FridayActivity extends Activity {
                 if (encodedMessage.contains("Имя устройства уже занято.")) {
                     Toast.makeText(this, "Это имя устройства уже занято. Пожалуйста, выберите другое.", Toast.LENGTH_LONG).show();
                     if (!isRegistrationWindowOpen) openRegistrationWindow();
-                } else if (encodedMessage.contains("Данные успешно обработаны")) {
+                } else if (encodedMessage.contains("Данные успешно обработаны") || "account_sync_success".equals(msgType)) {
                     try {
                         JSONObject jsonData = new JSONObject(encodedMessage);
                         if (isRegistrationWindowOpen) {
@@ -403,17 +430,17 @@ public class FridayActivity extends Activity {
                         if (jsonData.has("history")) pendingHistory = jsonData.getJSONArray("history").toString();
                         if (jsonData.has("user_login")) pendingUserLogin = jsonData.getString("user_login");
 
-                        openMainWindow();
+                        if (jsonData.has("history") && mainContent != null && mainContent.getVisibility() == View.VISIBLE) {
+                            displayHistory(jsonData.getJSONArray("history").toString());
+                        }
                     } catch (JSONException e) {
-                        Toast.makeText(this, "Ошибка обработки данных", Toast.LENGTH_SHORT).show();
+                        Log.e("SyncHandler", "Error processing sync data", e);
                     }
                 } else {
-                    // Check if it's a general response message
+                    // Check if it's a general response message only if text is provided
                     String respText = jsonMessage.optString("response", jsonMessage.optString("text", ""));
                     if (!respText.isEmpty()) {
                         appendBotResponse(respText);
-                    } else {
-                        Toast.makeText(this, encodedMessage, Toast.LENGTH_SHORT).show();
                     }
                 }
             } catch (JSONException e) {
@@ -439,15 +466,15 @@ public class FridayActivity extends Activity {
         if (btnDeleteDialog != null) btnDeleteDialog.setOnClickListener(v -> deleteCurrentDialog());
 
         // Nav bar buttons
-        View mainBtn = findViewById(R.id.main_btn);
-        View dataWindowBtn = findViewById(R.id.data_window_btn);
-        View devicesBtn = findViewById(R.id.devices_btn);
-        View settingsBtn = findViewById(R.id.settings_btn);
+        View navMain = findViewById(R.id.nav_main);
+        View navData = findViewById(R.id.nav_data);
+        View navDevices = findViewById(R.id.nav_devices);
+        View navSettings = findViewById(R.id.nav_settings);
 
-        if (mainBtn != null) mainBtn.setOnClickListener(v -> showMainContent());
-        if (dataWindowBtn != null) dataWindowBtn.setOnClickListener(v -> showChangeDataContent());
-        if (devicesBtn != null) devicesBtn.setOnClickListener(v -> showDevicesContent());
-        if (settingsBtn != null) settingsBtn.setOnClickListener(v -> showSettingsContent());
+        if (navMain != null) navMain.setOnClickListener(v -> showMainContent());
+        if (navData != null) navData.setOnClickListener(v -> showChangeDataContent());
+        if (navDevices != null) navDevices.setOnClickListener(v -> showDevicesContent());
+        if (navSettings != null) navSettings.setOnClickListener(v -> showSettingsContent());
 
         // RecyclerView Setup for Chat Messages
         chatRecyclerView = findViewById(R.id.chat_recycler_view);
@@ -779,11 +806,38 @@ public class FridayActivity extends Activity {
         });
     }
 
+    private void updateNavSelection(int selectedTab) {
+        ImageView mainIcon = findViewById(R.id.main_btn_icon);
+        TextView mainText = findViewById(R.id.main_btn);
+        ImageView dataIcon = findViewById(R.id.data_window_btn_icon);
+        TextView dataText = findViewById(R.id.data_window_btn);
+        ImageView devicesIcon = findViewById(R.id.devices_btn_icon);
+        TextView devicesText = findViewById(R.id.devices_btn);
+        ImageView settingsIcon = findViewById(R.id.settings_btn_icon);
+        TextView settingsText = findViewById(R.id.settings_btn);
+
+        int selectedColor = ContextCompat.getColor(this, R.color.nav_selected);
+        int unselectedColor = ContextCompat.getColor(this, R.color.nav_unselected);
+
+        if (mainIcon != null) mainIcon.setColorFilter(selectedTab == 0 ? selectedColor : unselectedColor);
+        if (mainText != null) mainText.setTextColor(selectedTab == 0 ? selectedColor : unselectedColor);
+
+        if (dataIcon != null) dataIcon.setColorFilter(selectedTab == 1 ? selectedColor : unselectedColor);
+        if (dataText != null) dataText.setTextColor(selectedTab == 1 ? selectedColor : unselectedColor);
+
+        if (devicesIcon != null) devicesIcon.setColorFilter(selectedTab == 2 ? selectedColor : unselectedColor);
+        if (devicesText != null) devicesText.setTextColor(selectedTab == 2 ? selectedColor : unselectedColor);
+
+        if (settingsIcon != null) settingsIcon.setColorFilter(selectedTab == 3 ? selectedColor : unselectedColor);
+        if (settingsText != null) settingsText.setTextColor(selectedTab == 3 ? selectedColor : unselectedColor);
+    }
+
     private void showMainContent() {
         if (mainContent != null) mainContent.setVisibility(View.VISIBLE);
         if (changeDataContent != null) changeDataContent.setVisibility(View.GONE);
         if (devicesContent != null) devicesContent.setVisibility(View.GONE);
         if (settingsContent != null) settingsContent.setVisibility(View.GONE);
+        updateNavSelection(0);
     }
 
     private void showDevicesContent() {
@@ -791,6 +845,7 @@ public class FridayActivity extends Activity {
         if (changeDataContent != null) changeDataContent.setVisibility(View.GONE);
         if (devicesContent != null) devicesContent.setVisibility(View.VISIBLE);
         if (settingsContent != null) settingsContent.setVisibility(View.GONE);
+        updateNavSelection(2);
 
         Button connectDeviceBtn = findViewById(R.id.btn_connect_device);
         LinearLayout accountDevicesContainer = findViewById(R.id.account_devices_container);
@@ -1100,6 +1155,7 @@ public class FridayActivity extends Activity {
         if (changeDataContent != null) changeDataContent.setVisibility(View.GONE);
         if (devicesContent != null) devicesContent.setVisibility(View.GONE);
         if (settingsContent != null) settingsContent.setVisibility(View.VISIBLE);
+        updateNavSelection(3);
 
         Spinner voiceSpinner = findViewById(R.id.bot_voice_spinner);
         Button saveVoiceBtn = findViewById(R.id.save_bot_voice_btn);
@@ -1142,6 +1198,7 @@ public class FridayActivity extends Activity {
         if (changeDataContent != null) changeDataContent.setVisibility(View.VISIBLE);
         if (devicesContent != null) devicesContent.setVisibility(View.GONE);
         if (settingsContent != null) settingsContent.setVisibility(View.GONE);
+        updateNavSelection(1);
 
         String fileName = "device_data.json";
         JSONObject deviceData = readDataFromFile(this, fileName);
@@ -1681,7 +1738,7 @@ public class FridayActivity extends Activity {
         instance = null;
     }
 
-    // --- Voice Input with VAD (AudioRecord at 16000Hz 16-bit PCM) ---
+    // --- Voice Input with continuous VAD (matching Web client) ---
     private void toggleAudioRecording() {
         int permissionCheck = ContextCompat.checkSelfPermission(getApplicationContext(), Manifest.permission.RECORD_AUDIO);
         if (permissionCheck != PackageManager.PERMISSION_GRANTED) {
@@ -1689,9 +1746,14 @@ public class FridayActivity extends Activity {
             return;
         }
 
-        if (isRecording) {
+        if (isMicModeActive) {
+            // User manually turns microphone OFF
+            isMicModeActive = false;
             stopAudioRecording();
         } else {
+            // User turns microphone ON
+            isMicModeActive = true;
+            vadState = "idle";
             startAudioRecording();
         }
     }
@@ -1727,56 +1789,139 @@ public class FridayActivity extends Activity {
             if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED) {
                 Log.e("AudioRecord", "AudioRecord failed to initialize");
                 Toast.makeText(this, "Не удалось инициализировать микрофон", Toast.LENGTH_SHORT).show();
+                isMicModeActive = false;
                 return;
             }
 
             audioRecord.startRecording();
             isRecording = true;
-            currentStreamId = "stream_" + System.currentTimeMillis();
+            vadState = "idle";
+            synchronized (preBuffer) { preBuffer.clear(); }
+            synchronized (pcmBuffer) { pcmBuffer.clear(); }
+            silenceSamples = 0;
 
-            // Create new ChatMessage: "Слушаю..."
-            currentVoiceUserMessage = ChatMessage.createUser("Слушаю...");
-            currentVoiceUserMessage.setUiMsgId(currentStreamId);
-            addChatMessage(currentVoiceUserMessage);
-
-            // Update mic button UI state to listening
-            if (micButton != null) micButton.setBackgroundResource(R.drawable.mic_button_listening);
-            if (micStatusText != null) micStatusText.setText("Слушаю...");
-
-            // Send streaming start command to server
-            try {
-                JSONObject startCmd = new JSONObject();
-                startCmd.put("command", "[Голосовое сообщение]");
-                startCmd.put("stream_audio", true);
-                startCmd.put("ui_msg_id", currentStreamId);
-                startCmd.put("voice_type", getSelectedVoice());
-                startCmd.put("mac", getUniqueDeviceId(this));
-                if (currentDialogId != null && !currentDialogId.isEmpty()) {
-                    startCmd.put("dialog_id", currentDialogId);
+            runOnUiThread(() -> {
+                if (micButton != null) micButton.setBackgroundResource(R.drawable.mic_button_listening);
+                if (micStatusText != null) {
+                    micStatusText.setVisibility(View.VISIBLE);
+                    micStatusText.setText("Слушаю...");
                 }
-                String token = getSavedToken();
-                if (token != null && !token.isEmpty()) {
-                    startCmd.put("token", token);
-                }
-                sendEncodedMessage(startCmd);
-            } catch (JSONException e) {
-                Log.e("AudioStream", "Error sending start stream command", e);
-            }
+            });
 
             recordingThread = new Thread(() -> {
-                byte[] buffer = new byte[3200]; // 100ms PCM chunks (1600 samples * 2 bytes)
+                short[] sampleBuffer = new short[1600]; // 100ms at 16kHz
                 while (isRecording && audioRecord != null) {
-                    int read = audioRecord.read(buffer, 0, buffer.length);
-                    if (read > 0) {
-                        try {
-                            String b64 = Base64.encodeToString(buffer, 0, read, Base64.NO_WRAP);
-                            JSONObject chunk = new JSONObject();
-                            chunk.put("type", "audio_stream_chunk");
-                            chunk.put("audio_base64", b64);
-                            chunk.put("ui_msg_id", currentStreamId);
-                            sendEncodedMessage(chunk);
-                        } catch (JSONException e) {
-                            Log.e("AudioStream", "Error sending audio chunk", e);
+                    int read = audioRecord.read(sampleBuffer, 0, sampleBuffer.length);
+                    if (read <= 0) continue;
+
+                    // If bot is speaking or just finished speaking within 600ms, mute input
+                    if (isBotSpeaking || (System.currentTimeMillis() - lastBotSpeakingTime < 600)) {
+                        silenceSamples = 0;
+                        continue;
+                    }
+
+                    if ("processing".equals(vadState)) {
+                        continue;
+                    }
+
+                    // Calculate average volume (RMS / absolute mean)
+                    long sum = 0;
+                    for (int i = 0; i < read; i++) {
+                        sum += Math.abs((int) sampleBuffer[i]);
+                    }
+                    double volume = (double) sum / read;
+
+                    if ("idle".equals(vadState)) {
+                        synchronized (preBuffer) {
+                            for (int i = 0; i < read; i++) {
+                                preBuffer.add(sampleBuffer[i]);
+                            }
+                            while (preBuffer.size() > PRE_BUFFER_LIMIT) {
+                                preBuffer.remove(0);
+                            }
+                        }
+
+                        if (volume > VAD_THRESHOLD) {
+                            // Speech detected! Start streaming
+                            vadState = "recording";
+                            silenceSamples = 0;
+                            currentStreamId = "stream_" + System.currentTimeMillis();
+
+                            synchronized (pcmBuffer) {
+                                pcmBuffer.clear();
+                                synchronized (preBuffer) {
+                                    pcmBuffer.addAll(preBuffer);
+                                    preBuffer.clear();
+                                }
+                            }
+
+                            runOnUiThread(() -> {
+                                currentVoiceUserMessage = ChatMessage.createUser("🎤 [Слушаю...]");
+                                currentVoiceUserMessage.setUiMsgId(currentStreamId);
+                                addChatMessage(currentVoiceUserMessage);
+                                currentBotResponseMsg = null;
+                            });
+
+                            // Send start stream command
+                            try {
+                                JSONObject startCmd = new JSONObject();
+                                startCmd.put("command", "");
+                                startCmd.put("stream_audio", true);
+                                startCmd.put("ui_msg_id", currentStreamId);
+                                startCmd.put("voice_type", getSelectedVoice());
+                                startCmd.put("mac", getUniqueDeviceId(this));
+                                if (currentDialogId != null && !currentDialogId.isEmpty()) {
+                                    startCmd.put("dialog_id", currentDialogId);
+                                }
+                                String token = getSavedToken();
+                                if (token != null && !token.isEmpty()) {
+                                    startCmd.put("token", token);
+                                }
+                                sendEncodedMessage(startCmd);
+                            } catch (JSONException e) {
+                                Log.e("AudioStream", "Error sending start command", e);
+                            }
+
+                            // Send pre-buffered chunk
+                            sendShortBufferChunk();
+                        }
+                    } else if ("recording".equals(vadState)) {
+                        synchronized (pcmBuffer) {
+                            for (int i = 0; i < read; i++) {
+                                pcmBuffer.add(sampleBuffer[i]);
+                            }
+                        }
+                        sendShortBufferChunk();
+
+                        if (volume < VAD_THRESHOLD) {
+                            silenceSamples += read;
+                            if (silenceSamples > SILENCE_FRAMES_LIMIT) {
+                                // User finished speaking!
+                                vadState = "processing";
+                                silenceSamples = 0;
+                                sendShortBufferChunk();
+
+                                runOnUiThread(() -> {
+                                    if (currentVoiceUserMessage != null) {
+                                        currentVoiceUserMessage.setText("⏳ Транскрибирую...");
+                                        if (chatAdapter != null) chatAdapter.notifyDataSetChanged();
+                                    }
+                                });
+
+                                // Send stream end
+                                if (currentStreamId != null) {
+                                    try {
+                                        JSONObject endMsg = new JSONObject();
+                                        endMsg.put("type", "audio_stream_end");
+                                        endMsg.put("ui_msg_id", currentStreamId);
+                                        sendEncodedMessage(endMsg);
+                                    } catch (JSONException e) {
+                                        Log.e("AudioStream", "Error sending stream end", e);
+                                    }
+                                }
+                            }
+                        } else {
+                            silenceSamples = 0;
                         }
                     }
                 }
@@ -1785,13 +1930,41 @@ public class FridayActivity extends Activity {
 
         } catch (SecurityException e) {
             Log.e("AudioRecord", "Permission denied", e);
+            isMicModeActive = false;
         } catch (Exception e) {
             Log.e("AudioRecord", "Error starting recording", e);
+            isMicModeActive = false;
+        }
+    }
+
+    private void sendShortBufferChunk() {
+        byte[] bytesToSend;
+        synchronized (pcmBuffer) {
+            if (pcmBuffer.isEmpty() || currentStreamId == null) return;
+            bytesToSend = new byte[pcmBuffer.size() * 2];
+            for (int i = 0; i < pcmBuffer.size(); i++) {
+                short val = pcmBuffer.get(i);
+                bytesToSend[i * 2] = (byte) (val & 0xFF);
+                bytesToSend[i * 2 + 1] = (byte) ((val >> 8) & 0xFF);
+            }
+            pcmBuffer.clear();
+        }
+
+        try {
+            String b64 = Base64.encodeToString(bytesToSend, Base64.NO_WRAP);
+            JSONObject chunk = new JSONObject();
+            chunk.put("type", "audio_stream_chunk");
+            chunk.put("audio_base64", b64);
+            chunk.put("ui_msg_id", currentStreamId);
+            sendEncodedMessage(chunk);
+        } catch (JSONException e) {
+            Log.e("AudioStream", "Error sending audio chunk", e);
         }
     }
 
     private void stopAudioRecording() {
         isRecording = false;
+        vadState = "idle";
         if (audioRecord != null) {
             try {
                 audioRecord.stop();
@@ -1802,15 +1975,6 @@ public class FridayActivity extends Activity {
             audioRecord = null;
         }
 
-        // Change user message text to "Транскрибирую..."
-        if (currentVoiceUserMessage != null) {
-            currentVoiceUserMessage.setText("Транскрибирую...");
-            if (chatAdapter != null) chatAdapter.notifyDataSetChanged();
-        }
-
-        if (micButton != null) micButton.setBackgroundResource(R.drawable.mic_button_idle);
-        if (micStatusText != null) micStatusText.setText("Нажмите для записи");
-
         if (currentStreamId != null) {
             try {
                 JSONObject endMsg = new JSONObject();
@@ -1820,14 +1984,23 @@ public class FridayActivity extends Activity {
             } catch (JSONException e) {
                 Log.e("AudioStream", "Error sending stream end", e);
             }
+            currentStreamId = null;
         }
+
+        runOnUiThread(() -> {
+            if (micButton != null) micButton.setBackgroundResource(R.drawable.mic_button_idle);
+            if (micStatusText != null) {
+                micStatusText.setVisibility(View.GONE);
+                micStatusText.setText(R.string.mic_idle);
+            }
+        });
     }
 
     private void updateVoiceUserMessage(String uiMsgId, String transcribedText) {
         runOnUiThread(() -> {
-            if (currentVoiceUserMessage != null && (uiMsgId.isEmpty() || uiMsgId.equals(currentVoiceUserMessage.getUiMsgId()))) {
+            if (currentVoiceUserMessage != null && (uiMsgId == null || uiMsgId.isEmpty() || uiMsgId.equals(currentVoiceUserMessage.getUiMsgId()))) {
                 currentVoiceUserMessage.setText(transcribedText);
-            } else {
+            } else if (uiMsgId != null && !uiMsgId.isEmpty()) {
                 for (ChatMessage msg : chatMessages) {
                     if (uiMsgId.equals(msg.getUiMsgId())) {
                         msg.setText(transcribedText);

@@ -1,37 +1,55 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Dark Background -->
-    <color name="bg_dark">#0F0F1A</color>
-    <color name="bg_surface">#1A1A2E</color>
-    <color name="bg_card">#16213E</color>
+    <!-- Web Palette Tokens -->
+    <color name="white">#FFFFFF</color>
+    <color name="blue_mist">#F2F8FD</color>
+    <color name="purple_mist">#F7F4FC</color>
+    <color name="graphite">#1E2330</color>
+    <color name="graphite_soft">#303746</color>
+    <color name="brand_blue">#3A98D8</color>
+    <color name="brand_blue_dark">#2478B4</color>
+    <color name="brand_purple">#755BC8</color>
+    <color name="muted">#667085</color>
+    <color name="muted_light">#98A2B3</color>
+    <color name="border">#DCE6F0</color>
+    <color name="border_strong">#C9D7E5</color>
+    <color name="success">#18765B</color>
+    <color name="danger">#B83C54</color>
+    <color name="warning">#B16B16</color>
+
+    <!-- App Mappings (Light & Web-matching Theme) -->
+    <color name="bg_dark">#F2F8FD</color>
+    <color name="bg_surface">#FFFFFF</color>
+    <color name="bg_card">#FFFFFF</color>
+    <color name="chat_bg">#F8FBFE</color>
 
     <!-- Accent -->
-    <color name="accent_primary">#7C4DFF</color>
-    <color name="accent_secondary">#E040FB</color>
-    <color name="accent_glow">#5C35CC</color>
+    <color name="accent_primary">#2478B4</color>
+    <color name="accent_secondary">#6850B7</color>
+    <color name="accent_glow">#3A98D8</color>
 
     <!-- Chat bubbles -->
-    <color name="bubble_user">#7C4DFF</color>
-    <color name="bubble_user_dark">#5C35CC</color>
-    <color name="bubble_bot">#1E1E3A</color>
-    <color name="bubble_bot_border">#2A2A50</color>
+    <color name="bubble_user">#2478B4</color>
+    <color name="bubble_user_dark">#6850B7</color>
+    <color name="bubble_bot">#FFFFFF</color>
+    <color name="bubble_bot_border">#DCE6F0</color>
 
     <!-- Text -->
-    <color name="text_primary">#F0F0FF</color>
-    <color name="text_secondary">#9090BB</color>
-    <color name="text_hint">#55556A</color>
+    <color name="text_primary">#1E2330</color>
+    <color name="text_secondary">#667085</color>
+    <color name="text_hint">#98A2B3</color>
 
     <!-- Status -->
-    <color name="status_listening">#4CAF50</color>
-    <color name="status_transcribing">#FF9800</color>
-    <color name="status_responding">#7C4DFF</color>
+    <color name="status_listening">#18765B</color>
+    <color name="status_transcribing">#B16B16</color>
+    <color name="status_responding">#755BC8</color>
 
     <!-- UI elements -->
-    <color name="input_bg">#1E1E38</color>
-    <color name="divider">#252545</color>
-    <color name="online_green">#4CAF50</color>
-    <color name="offline_red">#F44336</color>
-    <color name="nav_bg">#12122A</color>
-    <color name="nav_selected">#7C4DFF</color>
-    <color name="nav_unselected">#55556A</color>
+    <color name="input_bg">#FBFDFF</color>
+    <color name="divider">#DCE6F0</color>
+    <color name="online_green">#18765B</color>
+    <color name="offline_red">#B83C54</color>
+    <color name="nav_bg">#FFFFFF</color>
+    <color name="nav_selected">#2478B4</color>
+    <color name="nav_unselected">#98A2B3</color>
 </resources>

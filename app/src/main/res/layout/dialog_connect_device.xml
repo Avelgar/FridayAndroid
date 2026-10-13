@@ -3,49 +3,83 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:padding="16dp">
+    android:padding="24dp"
+    android:background="@color/white">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="ПОДКЛЮЧЕНИЕ"
+        android:textColor="@color/brand_blue_dark"
+        android:textSize="10sp"
+        android:textStyle="bold"
+        android:letterSpacing="0.1" />
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="Подключение устройства"
-        android:textSize="20sp"
+        android:textColor="@color/graphite"
+        android:textSize="22sp"
         android:textStyle="bold"
-        android:layout_marginBottom="16dp"/>
+        android:layout_marginTop="4dp"
+        android:layout_marginBottom="18dp"/>
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="Имя устройства"
-        android:layout_marginBottom="4dp"/>
+        android:textColor="@color/graphite_soft"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="6dp"/>
 
     <EditText
         android:id="@+id/et_device_name"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="48dp"
         android:hint="Введите имя устройства"
+        android:textColorHint="@color/muted_light"
+        android:textColor="@color/graphite"
+        android:textSize="14sp"
+        android:background="@drawable/input_background"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
         android:inputType="text"/>
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:text="Пароль устройства"
-        android:layout_marginTop="16dp"
-        android:layout_marginBottom="4dp"/>
+        android:textColor="@color/graphite_soft"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:layout_marginTop="14dp"
+        android:layout_marginBottom="6dp"/>
 
     <EditText
         android:id="@+id/et_device_password"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="48dp"
         android:hint="Введите пароль"
+        android:textColorHint="@color/muted_light"
+        android:textColor="@color/graphite"
+        android:textSize="14sp"
+        android:background="@drawable/input_background"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
         android:inputType="textPassword"/>
 
     <Button
         android:id="@+id/btn_connect"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="48dp"
         android:text="Подключить"
-        android:layout_marginTop="24dp"/>
+        android:textColor="@color/white"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:background="@drawable/button_background"
+        android:layout_marginTop="20dp"/>
 
     <ProgressBar
         android:id="@+id/progress_bar"
@@ -60,5 +94,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="16dp"
+        android:textColor="@color/brand_blue_dark"
+        android:textSize="13sp"
         android:visibility="gone"/>
 </LinearLayout>

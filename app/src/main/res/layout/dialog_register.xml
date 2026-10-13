@@ -3,50 +3,135 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:padding="16dp">
+    android:padding="24dp"
+    android:background="@color/white">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="НОВЫЙ АККАУНТ"
+        android:textColor="@color/brand_blue_dark"
+        android:textSize="10sp"
+        android:textStyle="bold"
+        android:letterSpacing="0.1" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Регистрация"
+        android:textColor="@color/graphite"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        android:layout_marginTop="4dp"
+        android:layout_marginBottom="18dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Электронная почта"
+        android:textColor="@color/graphite_soft"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="6dp" />
 
     <EditText
         android:id="@+id/etEmail"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:hint="Email"
+        android:layout_height="48dp"
+        android:hint="name@example.com"
+        android:textColorHint="@color/muted_light"
+        android:textColor="@color/graphite"
+        android:textSize="14sp"
+        android:background="@drawable/input_background"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
         android:inputType="textEmailAddress"/>
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Логин"
+        android:textColor="@color/graphite_soft"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:layout_marginTop="14dp"
+        android:layout_marginBottom="6dp" />
 
     <EditText
         android:id="@+id/etLogin"
         android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:hint="Ваш логин"
+        android:textColorHint="@color/muted_light"
+        android:textColor="@color/graphite"
+        android:textSize="14sp"
+        android:background="@drawable/input_background"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"/>
+
+    <TextView
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:hint="Логин"
-        android:layout_marginTop="8dp"/>
+        android:text="Пароль"
+        android:textColor="@color/graphite_soft"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:layout_marginTop="14dp"
+        android:layout_marginBottom="6dp" />
 
     <EditText
         android:id="@+id/etPassword"
         android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:hint="Не менее 8 символов"
+        android:textColorHint="@color/muted_light"
+        android:textColor="@color/graphite"
+        android:textSize="14sp"
+        android:background="@drawable/input_background"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
+        android:inputType="textPassword"/>
+
+    <TextView
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:hint="Пароль"
-        android:inputType="textPassword"
-        android:layout_marginTop="8dp"/>
+        android:text="Повторите пароль"
+        android:textColor="@color/graphite_soft"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:layout_marginTop="14dp"
+        android:layout_marginBottom="6dp" />
 
     <EditText
         android:id="@+id/etConfirmPassword"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:hint="Подтвердите пароль"
-        android:inputType="textPassword"
-        android:layout_marginTop="8dp"/>
+        android:layout_height="48dp"
+        android:hint="Введите пароль ещё раз"
+        android:textColorHint="@color/muted_light"
+        android:textColor="@color/graphite"
+        android:textSize="14sp"
+        android:background="@drawable/input_background"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
+        android:inputType="textPassword"/>
 
     <TextView
         android:id="@+id/tvServerResponse"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:textColor="#FF0000"/>
+        android:textColor="@color/danger"
+        android:textSize="13sp"/>
 
     <Button
         android:id="@+id/btnRegister"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="48dp"
         android:text="Зарегистрироваться"
+        android:textColor="@color/white"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:background="@drawable/button_background"
         android:layout_marginTop="16dp"/>
 
 </LinearLayout>
