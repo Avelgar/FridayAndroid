@@ -412,26 +412,67 @@ public class FridayActivity extends Activity {
                     return;
                 }
 
+                if ("clear_history".equals(msgType) || "delete_history".equals(msgType)) {
+                    clearGuestHistoryLocally();
+                    return;
+                }
+
                 if (encodedMessage.contains("Имя устройства уже занято.")) {
                     Toast.makeText(this, "Это имя устройства уже занято. Пожалуйста, выберите другое.", Toast.LENGTH_LONG).show();
                     if (!isRegistrationWindowOpen) openRegistrationWindow();
-                } else if (encodedMessage.contains("Данные успешно обработаны") || "account_sync_success".equals(msgType)) {
+                } else if (encodedMessage.contains("Данные успешно обработаны") || "account_sync_success".equals(msgType) || (jsonMessage.has("user_login") && !jsonMessage.isNull("user_login"))) {
                     try {
-                        JSONObject jsonData = new JSONObject(encodedMessage);
+                        JSONObject jsonData = jsonMessage;
                         if (isRegistrationWindowOpen) {
                             EditText deviceNameEditText = findViewById(R.id.deviceName);
                             EditText passwordEditText = findViewById(R.id.password);
-                            JSONObject deviceData = new JSONObject();
-                            deviceData.put("deviceName", deviceNameEditText.getText().toString());
-                            deviceData.put("password", passwordEditText.getText().toString());
-                            saveDataToFile(this, "device_data.json", deviceData);
-                            Toast.makeText(this, "Данные успешно сохранены", Toast.LENGTH_LONG).show();
+                            String dName = deviceNameEditText != null ? deviceNameEditText.getText().toString().trim() : "";
+                            String dPass = passwordEditText != null ? passwordEditText.getText().toString().trim() : "";
+                            if (!dName.isEmpty() && !dPass.isEmpty()) {
+                                JSONObject deviceData = new JSONObject();
+                                deviceData.put("deviceName", dName);
+                                deviceData.put("password", dPass);
+                                saveDataToFile(this, "device_data.json", deviceData);
+                            }
+                            Toast.makeText(this, "Устройство успешно зарегистрировано", Toast.LENGTH_LONG).show();
+                            openMainWindow();
+                            sendDeviceData();
                         }
-                        if (jsonData.has("history")) pendingHistory = jsonData.getJSONArray("history").toString();
-                        if (jsonData.has("user_login")) pendingUserLogin = jsonData.getString("user_login");
 
-                        if (jsonData.has("history") && mainContent != null && mainContent.getVisibility() == View.VISIBLE) {
-                            displayHistory(jsonData.getJSONArray("history").toString());
+                        String userLogin = null;
+                        if (jsonData.has("user_login") && !jsonData.isNull("user_login")) {
+                            userLogin = jsonData.getString("user_login");
+                        } else if (jsonData.has("login") && !jsonData.isNull("login")) {
+                            userLogin = jsonData.getString("login");
+                        }
+
+                        String userToken = null;
+                        if (jsonData.has("token") && !jsonData.isNull("token")) {
+                            userToken = jsonData.getString("token");
+                        } else if (jsonData.has("user_token") && !jsonData.isNull("user_token")) {
+                            userToken = jsonData.getString("user_token");
+                        }
+
+                        if (userLogin != null && !userLogin.trim().isEmpty()) {
+                            pendingUserLogin = userLogin.trim();
+                            if (userToken == null || userToken.trim().isEmpty()) {
+                                userToken = getSavedToken();
+                            }
+                            saveAuthData(userToken, pendingUserLogin);
+                            updateUserUI();
+                            if (userToken != null && !userToken.trim().isEmpty()) {
+                                loadUserDialogs();
+                            }
+                            if (jsonData.has("history")) {
+                                pendingHistory = jsonData.getJSONArray("history").toString();
+                                if (mainContent != null && mainContent.getVisibility() == View.VISIBLE) {
+                                    displayHistory(pendingHistory);
+                                }
+                            }
+                        } else {
+                            // Без аккаунта (гость): игнорируем историю от сервера, читаем строго локальную
+                            updateUserUI();
+                            loadGuestHistory();
                         }
                     } catch (JSONException e) {
                         Log.e("SyncHandler", "Error processing sync data", e);
@@ -464,6 +505,11 @@ public class FridayActivity extends Activity {
         ImageButton btnDeleteDialog = findViewById(R.id.btn_delete_dialog);
         if (btnNewDialog != null) btnNewDialog.setOnClickListener(v -> createNewDialog());
         if (btnDeleteDialog != null) btnDeleteDialog.setOnClickListener(v -> deleteCurrentDialog());
+
+        ImageButton btnClearHistory = findViewById(R.id.btn_clear_history);
+        if (btnClearHistory != null) {
+            btnClearHistory.setOnClickListener(v -> confirmClearHistory());
+        }
 
         // Nav bar buttons
         View navMain = findViewById(R.id.nav_main);
@@ -525,14 +571,16 @@ public class FridayActivity extends Activity {
             }
         }
 
-        if (pendingHistory != null) {
-            displayHistory(pendingHistory);
-            pendingHistory = null;
-        }
-
         String token = getSavedToken();
         if (token != null && !token.isEmpty()) {
+            if (pendingHistory != null) {
+                displayHistory(pendingHistory);
+                pendingHistory = null;
+            }
             loadUserDialogs();
+        } else {
+            pendingHistory = null;
+            loadGuestHistory();
         }
     }
 
@@ -550,7 +598,9 @@ public class FridayActivity extends Activity {
             }
         }
 
+        ImageButton btnClearHistory = findViewById(R.id.btn_clear_history);
         if (savedLogin != null && !savedLogin.isEmpty()) {
+            if (btnClearHistory != null) btnClearHistory.setVisibility(View.GONE);
             if (btnUserProfile != null) {
                 btnUserProfile.setText(savedLogin);
                 btnUserProfile.setVisibility(View.VISIBLE);
@@ -578,6 +628,10 @@ public class FridayActivity extends Activity {
             }
             if (btnUserProfile != null) btnUserProfile.setVisibility(View.GONE);
             if (dialogsLayout != null) dialogsLayout.setVisibility(View.GONE);
+            if (btnClearHistory != null) {
+                btnClearHistory.setVisibility(View.VISIBLE);
+                btnClearHistory.setOnClickListener(v -> confirmClearHistory());
+            }
         }
     }
 
@@ -721,6 +775,7 @@ public class FridayActivity extends Activity {
             chatAdapter.notifyItemInserted(chatMessages.size() - 1);
             scrollToBottom();
         }
+        saveGuestHistory();
     }
 
     private void sendTextMessage() {
@@ -795,7 +850,9 @@ public class FridayActivity extends Activity {
                     if (isUser) {
                         chatMessages.add(ChatMessage.createUser(text));
                     } else {
-                        chatMessages.add(ChatMessage.createBot(text));
+                        // Clean bot prefix if present in stored history
+                        String cleanBotText = text.replaceAll("(?i)(^|\\n)(бот|bot|пятница):\\s*", "$1").trim();
+                        chatMessages.add(ChatMessage.createBot(cleanBotText));
                     }
                 }
                 if (chatAdapter != null) chatAdapter.notifyDataSetChanged();
@@ -914,10 +971,15 @@ public class FridayActivity extends Activity {
         try {
             LinearLayout deviceLayout = new LinearLayout(this);
             deviceLayout.setOrientation(LinearLayout.HORIZONTAL);
-            deviceLayout.setLayoutParams(new LinearLayout.LayoutParams(
+
+            LinearLayout.LayoutParams itemParams = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT));
-            deviceLayout.setPadding(24, 24, 24, 24);
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            int margin = (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 10, getResources().getDisplayMetrics());
+            itemParams.setMargins(0, 0, 0, margin);
+            deviceLayout.setLayoutParams(itemParams);
+
+            deviceLayout.setPadding(28, 24, 28, 24);
             deviceLayout.setBackgroundResource(R.drawable.device_item_background);
 
             String deviceName = device.optString("DeviceName", "Неизвестное устройство");
@@ -934,10 +996,11 @@ public class FridayActivity extends Activity {
                     textWeight));
             textContainer.setPadding(0, 0, 16, 0);
 
-            int textColor = Color.parseColor("#F1F1F5");
-            int macTextColor = Color.parseColor("#9090A6");
+            // Контрастные цвета из палитры темы для белого фона карточки
+            int textColor = ContextCompat.getColor(this, R.color.text_primary);
+            int macTextColor = ContextCompat.getColor(this, R.color.text_secondary);
             int textSize = 16;
-            int macTextSize = 14;
+            int macTextSize = 13;
 
             TextView nameView = new TextView(this);
             nameView.setLayoutParams(new LinearLayout.LayoutParams(
@@ -954,9 +1017,11 @@ public class FridayActivity extends Activity {
 
             LinearLayout statusContainer = new LinearLayout(this);
             statusContainer.setOrientation(LinearLayout.HORIZONTAL);
-            statusContainer.setLayoutParams(new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT));
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            statusParams.topMargin = (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 4, getResources().getDisplayMetrics());
+            statusContainer.setLayoutParams(statusParams);
 
             TextView macView = new TextView(this);
             macView.setLayoutParams(new LinearLayout.LayoutParams(
@@ -973,7 +1038,7 @@ public class FridayActivity extends Activity {
             separator.setLayoutParams(new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT));
-            separator.setText(" - ");
+            separator.setText(" — ");
             separator.setTextColor(macTextColor);
             separator.setTextSize(TypedValue.COMPLEX_UNIT_SP, macTextSize);
             statusContainer.addView(separator);
@@ -983,8 +1048,9 @@ public class FridayActivity extends Activity {
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT));
             statusView.setText(isOnline ? "онлайн" : "офлайн");
-            statusView.setTextColor(isOnline ? Color.parseColor("#4CAF50") : Color.parseColor("#E53935"));
+            statusView.setTextColor(isOnline ? ContextCompat.getColor(this, R.color.online_green) : ContextCompat.getColor(this, R.color.offline_red));
             statusView.setTextSize(TypedValue.COMPLEX_UNIT_SP, macTextSize);
+            statusView.setTypeface(null, Typeface.BOLD);
             statusContainer.addView(statusView);
 
             textContainer.addView(statusContainer);
@@ -1454,6 +1520,7 @@ public class FridayActivity extends Activity {
                     if (chatAdapter != null) chatAdapter.notifyDataSetChanged();
                     Toast.makeText(this, "Выход из аккаунта выполнен", Toast.LENGTH_SHORT).show();
                     openMainWindow();
+                    loadGuestHistory();
                 });
             }
         }).start();
@@ -2014,15 +2081,100 @@ public class FridayActivity extends Activity {
     }
 
     private void appendBotResponse(String chunkText) {
+        if (chunkText == null || chunkText.isEmpty()) return;
+
+        // Удаляем префикс "Бот: ", если сервер или сторонний источник его присылает
+        String cleaned = chunkText.replaceAll("(?i)(^|\\n)(бот|bot|пятница):\\s*", "$1").trim();
+        if (cleaned.isEmpty()) return;
+
         runOnUiThread(() -> {
             if (currentBotResponseMsg == null) {
-                currentBotResponseMsg = ChatMessage.createBot(chunkText);
+                currentBotResponseMsg = ChatMessage.createBot(cleaned);
                 addChatMessage(currentBotResponseMsg);
             } else {
-                currentBotResponseMsg.setText(currentBotResponseMsg.getText() + chunkText);
+                String existing = currentBotResponseMsg.getText();
+                if (existing != null && !existing.isEmpty()) {
+                    if (!existing.endsWith(" ") && !existing.endsWith("\n") && !cleaned.startsWith(" ") && !cleaned.startsWith("\n")) {
+                        currentBotResponseMsg.setText(existing + " " + cleaned);
+                    } else {
+                        currentBotResponseMsg.setText(existing + cleaned);
+                    }
+                } else {
+                    currentBotResponseMsg.setText(cleaned);
+                }
                 if (chatAdapter != null) chatAdapter.notifyDataSetChanged();
                 scrollToBottom();
             }
+            saveGuestHistory();
+        });
+    }
+
+    public void resetCurrentBotResponse() {
+        currentBotResponseMsg = null;
+        saveGuestHistory();
+    }
+
+    private static final String GUEST_HISTORY_FILE = "guest_history.json";
+
+    private void saveGuestHistory() {
+        String token = getSavedToken();
+        if (token != null && !token.isEmpty()) return;
+        if (pendingUserLogin != null && !pendingUserLogin.isEmpty()) return;
+
+        try {
+            JSONArray array = new JSONArray();
+            for (ChatMessage msg : chatMessages) {
+                JSONObject obj = new JSONObject();
+                obj.put("sender", msg.getType() == ChatMessage.TYPE_USER ? "user" : "bot");
+                obj.put("text", msg.getText());
+                array.put(obj);
+            }
+            JSONObject root = new JSONObject();
+            root.put("history", array);
+            saveDataToFile(this, GUEST_HISTORY_FILE, root);
+        } catch (Exception e) {
+            Log.e("GuestHistory", "Error saving guest history", e);
+        }
+    }
+
+    private void loadGuestHistory() {
+        String token = getSavedToken();
+        if (token != null && !token.isEmpty()) return;
+        if (pendingUserLogin != null && !pendingUserLogin.isEmpty()) return;
+
+        JSONObject root = readDataFromFile(this, GUEST_HISTORY_FILE);
+        if (root != null && root.has("history")) {
+            try {
+                displayHistory(root.getJSONArray("history").toString());
+            } catch (Exception e) {
+                Log.e("GuestHistory", "Error loading guest history", e);
+            }
+        }
+    }
+
+    private void confirmClearHistory() {
+        new AlertDialog.Builder(this)
+                .setTitle("Очистить историю")
+                .setMessage("Вы уверены, что хотите удалить историю сообщений?")
+                .setPositiveButton("Очистить", (dialog, which) -> clearGuestHistoryLocally())
+                .setNegativeButton("Отмена", null)
+                .show();
+    }
+
+    public void clearGuestHistoryLocally() {
+        runOnUiThread(() -> {
+            chatMessages.clear();
+            currentBotResponseMsg = null;
+            pendingHistory = null;
+            try {
+                JSONObject empty = new JSONObject();
+                empty.put("history", new JSONArray());
+                saveDataToFile(this, GUEST_HISTORY_FILE, empty);
+            } catch (Exception e) {}
+            if (chatAdapter != null) {
+                chatAdapter.notifyDataSetChanged();
+            }
+            Toast.makeText(this, "История очищена", Toast.LENGTH_SHORT).show();
         });
     }
 

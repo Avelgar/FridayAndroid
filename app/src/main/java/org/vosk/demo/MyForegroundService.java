@@ -103,15 +103,25 @@ public class MyForegroundService extends Service {
                     String sourceDevice = commandMessage.optString("source_device", "");
                     String userMsgId = commandMessage.optString("user_msg_id", "");
 
-                    // Вывод текста в UI
+                    // Вывод текста в UI без повторения префикса "Бот:"
                     String displayMessageText = commandMessage.optString("text", "").trim();
                     if (!displayMessageText.isEmpty() && !displayMessageText.equals("[Системная команда]")) {
-                        String finalMsg = sender + ": " + displayMessageText;
+                        String cleanText = displayMessageText;
+                        if (cleanText.matches("^(?i)(бот|bot|пятница):\\s*.*")) {
+                            cleanText = cleanText.replaceFirst("^(?i)(бот|bot|пятница):\\s*", "");
+                        }
+                        final String textToAppend = cleanText;
                         FridayActivity activity = FridayActivity.getInstance();
                         if (activity != null) {
-                            activity.runOnUiThread(() -> activity.updateResultText(finalMsg + "\n"));
+                            activity.runOnUiThread(() -> activity.updateResultText(textToAppend));
                         }
-                        showNotificationWithText(finalMsg);
+                        showNotificationWithText(cleanText);
+                    } else if (displayMessageText.isEmpty()) {
+                        // Пустой текст означает конец потоковой передачи текущего сообщения
+                        FridayActivity activity = FridayActivity.getInstance();
+                        if (activity != null) {
+                            activity.runOnUiThread(() -> activity.resetCurrentBotResponse());
+                        }
                     }
 
                     // Воспроизведение Native Audio
@@ -124,20 +134,26 @@ public class MyForegroundService extends Service {
                     boolean needProcesses = false;
                     boolean needPrograms = false;
 
-                    // Выполнение действий
-                    if (commandMessage.has("actions")) {
+                    // Выполнение действий (строго если actions не пустой!)
+                    if (commandMessage.has("actions") && !commandMessage.isNull("actions")) {
                         JSONArray actions = commandMessage.getJSONArray("actions");
-                        for (int i = 0; i < actions.length(); i++) {
-                            JSONObject actionObj = actions.getJSONObject(i);
-                            String actionType = actionObj.optString("action_type", "").toLowerCase();
-                            String actionValue = actionObj.optString("action_value", "").toLowerCase();
-                            
-                            if (actionType.equals("data_request")) {
-                                needsDataResponse = true;
-                                if (actionValue.contains("process") || actionValue.contains("процесс")) needProcesses = true;
-                                if (actionValue.contains("program") || actionValue.contains("app") || actionValue.contains("прилож")) needPrograms = true;
-                            } else {
-                                processAction(actionType, actionObj.optString("action_value", ""));
+                        if (actions.length() > 0) {
+                            FridayActivity activity = FridayActivity.getInstance();
+                            if (activity != null) {
+                                activity.runOnUiThread(() -> activity.resetCurrentBotResponse());
+                            }
+                            for (int i = 0; i < actions.length(); i++) {
+                                JSONObject actionObj = actions.getJSONObject(i);
+                                String actionType = actionObj.optString("action_type", "").toLowerCase();
+                                String actionValue = actionObj.optString("action_value", "").toLowerCase();
+                                
+                                if (actionType.equals("data_request")) {
+                                    needsDataResponse = true;
+                                    if (actionValue.contains("process") || actionValue.contains("процесс")) needProcesses = true;
+                                    if (actionValue.contains("program") || actionValue.contains("app") || actionValue.contains("прилож")) needPrograms = true;
+                                } else {
+                                    processAction(actionType, actionObj.optString("action_value", ""));
+                                }
                             }
                         }
                     }
@@ -160,6 +176,7 @@ public class MyForegroundService extends Service {
                         FridayActivity activity = FridayActivity.getInstance();
                         if (activity != null) {
                             activity.sendEncodedMessage(response);
+                            activity.runOnUiThread(() -> activity.resetCurrentBotResponse());
                         }
                     }
                 }
@@ -302,12 +319,19 @@ public class MyForegroundService extends Service {
                 else if (actionContent.equals("выключить музыку")) controlMediaPlayback("pause");
                 else if (actionContent.equals("включить музыку")) controlMediaPlayback("play");
                 break;
+            case "очистка истории":
+            case "очистить историю":
+            case "clear_history":
+            case "delete_history":
+                FridayActivity act = FridayActivity.getInstance();
+                if (act != null) {
+                    act.clearGuestHistoryLocally();
+                }
+                break;
             default:
                 Log.w("CommandHandler", "Unknown action type: " + actionType);
         }
     }
-
-
 
     public void controlMediaPlayback(String action) {
         try {
