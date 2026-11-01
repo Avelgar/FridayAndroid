@@ -21,6 +21,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.Base64;
@@ -75,8 +76,68 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
+import android.graphics.PixelFormat;
+import android.graphics.SurfaceTexture;
+import android.hardware.camera2.CameraCaptureSession;
+import android.hardware.camera2.CameraCharacteristics;
+import android.hardware.camera2.CameraDevice;
+import android.hardware.camera2.CameraManager;
+import android.hardware.camera2.CameraMetadata;
+import android.hardware.camera2.CaptureRequest;
+import android.hardware.display.DisplayManager;
+import android.hardware.display.VirtualDisplay;
+import android.media.Image;
+import android.media.ImageReader;
+import android.media.projection.MediaProjection;
+import android.media.projection.MediaProjectionManager;
+import android.os.HandlerThread;
+import android.util.DisplayMetrics;
+import android.view.Surface;
+import android.view.TextureView;
+import java.nio.ByteBuffer;
+import java.util.Collections;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
 
 public class FridayActivity extends Activity {
+
+    // Video streaming
+    public static final int VIDEO_MODE_NONE = 0;
+    public static final int VIDEO_MODE_FRONT = 1;
+    public static final int VIDEO_MODE_BACK = 2;
+    public static final int VIDEO_MODE_SCREEN = 3;
+
+    private static final int PERMISSIONS_REQUEST_CAMERA = 2001;
+    private static final int REQUEST_SCREEN_CAPTURE = 2002;
+
+    private int currentVideoMode = VIDEO_MODE_NONE;
+    private long lastVideoFrameTime = 0;
+    private final ExecutorService videoExecutor = Executors.newSingleThreadExecutor();
+
+    private final Handler videoTimerHandler = new Handler(Looper.getMainLooper());
+    private Runnable videoTimerRunnable;
+
+
+    private TextView tvVideoStatus;
+    private View videoPreviewContainer;
+    private TextureView cameraTextureView;
+    private Button btnVideoFront;
+    private Button btnVideoBack;
+    private Button btnVideoScreen;
+
+    private CameraDevice cameraDevice;
+    private CameraCaptureSession cameraCaptureSession;
+    private HandlerThread cameraBackgroundThread;
+    private Handler cameraBackgroundHandler;
+
+    private MediaProjectionManager mediaProjectionManager;
+    private MediaProjection mediaProjection;
+    private VirtualDisplay virtualDisplay;
+    private ImageReader imageReaderScreen;
+    private Intent screenCaptureIntentData;
+    private int screenCaptureResultCode = 0;
+
 
     private static FridayActivity instance;
     private static final int PERMISSIONS_REQUEST_RECORD_AUDIO = 1;
@@ -559,6 +620,18 @@ public class FridayActivity extends Activity {
         micButton = findViewById(R.id.recognize_mic);
         micStatusText = findViewById(R.id.tv_mic_status);
         if (micButton != null) micButton.setOnClickListener(view -> toggleAudioRecording());
+
+        tvVideoStatus = findViewById(R.id.tv_video_status);
+        videoPreviewContainer = findViewById(R.id.video_preview_container);
+        cameraTextureView = findViewById(R.id.camera_texture_view);
+        btnVideoFront = findViewById(R.id.btn_video_front);
+        btnVideoBack = findViewById(R.id.btn_video_back);
+        btnVideoScreen = findViewById(R.id.btn_video_screen);
+
+        if (btnVideoFront != null) btnVideoFront.setOnClickListener(v -> toggleVideoMode(VIDEO_MODE_FRONT));
+        if (btnVideoBack != null) btnVideoBack.setOnClickListener(v -> toggleVideoMode(VIDEO_MODE_BACK));
+        if (btnVideoScreen != null) btnVideoScreen.setOnClickListener(v -> toggleVideoMode(VIDEO_MODE_SCREEN));
+
 
         showMainContent();
 
@@ -1775,6 +1848,17 @@ public class FridayActivity extends Activity {
     protected void onResume() {
         super.onResume();
         checkAndRequestPermissions();
+        if (currentVideoMode == VIDEO_MODE_FRONT || currentVideoMode == VIDEO_MODE_BACK) {
+            startCameraPreview(currentVideoMode);
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (currentVideoMode == VIDEO_MODE_FRONT || currentVideoMode == VIDEO_MODE_BACK) {
+            stopCamera();
+        }
     }
 
     private void checkAndRequestPermissions() {
@@ -1789,6 +1873,11 @@ public class FridayActivity extends Activity {
     public void onDestroy() {
         isDestroyed = true;
         stopAudioRecording();
+                stopCamera();
+        stopScreenCapture();
+        if (videoExecutor != null) {
+            videoExecutor.shutdown();
+        }
         stopService(new Intent(this, MyForegroundService.class));
         if (webSocket != null) {
             try { webSocket.close(1000, "Activity destroyed"); } catch (Exception e) {}
@@ -1951,6 +2040,11 @@ public class FridayActivity extends Activity {
 
                             // Send pre-buffered chunk
                             sendShortBufferChunk();
+
+                            if (currentVideoMode != VIDEO_MODE_NONE) {
+                                startVideoStreamingTimer(currentStreamId);
+                            }
+
                         }
                     } else if ("recording".equals(vadState)) {
                         synchronized (pcmBuffer) {
@@ -1960,12 +2054,22 @@ public class FridayActivity extends Activity {
                         }
                         sendShortBufferChunk();
 
+                        if ("recording".equals(vadState) && currentStreamId != null && currentVideoMode != VIDEO_MODE_NONE) {
+                            long now = System.currentTimeMillis();
+                            if (now - lastVideoFrameTime >= 1000) {
+                                lastVideoFrameTime = now;
+                                final String sId = currentStreamId;
+                                captureAndSendVideoFrame(sId);
+                            }
+                        }
+
                         if (volume < VAD_THRESHOLD) {
                             silenceSamples += read;
                             if (silenceSamples > SILENCE_FRAMES_LIMIT) {
                                 // User finished speaking!
                                 vadState = "processing";
                                 silenceSamples = 0;
+                                stopVideoStreamingTimer();
                                 sendShortBufferChunk();
 
                                 runOnUiThread(() -> {
@@ -2030,6 +2134,7 @@ public class FridayActivity extends Activity {
     }
 
     private void stopAudioRecording() {
+        stopVideoStreamingTimer();
         isRecording = false;
         vadState = "idle";
         if (audioRecord != null) {
@@ -2187,4 +2292,461 @@ public class FridayActivity extends Activity {
             chatRecyclerView.smoothScrollToPosition(chatAdapter.getItemCount() - 1);
         }
     }
+
+
+    // ==========================================
+    // VIDEO STREAMING (Camera / Screen Capture)
+    // ==========================================
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == PERMISSIONS_REQUEST_CAMERA) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                if (currentVideoMode == VIDEO_MODE_FRONT || currentVideoMode == VIDEO_MODE_BACK) {
+                    startCameraPreview(currentVideoMode);
+                }
+            } else {
+                Toast.makeText(this, "Доступ к камере отклонен", Toast.LENGTH_SHORT).show();
+                setVideoMode(VIDEO_MODE_NONE);
+            }
+        } else if (requestCode == PERMISSIONS_REQUEST_RECORD_AUDIO) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                isMicModeActive = true;
+                vadState = "idle";
+                startAudioRecording();
+            } else {
+                Toast.makeText(this, "Доступ к микрофону отклонен", Toast.LENGTH_SHORT).show();
+            }
+        }
+    }
+
+    private void toggleVideoMode(int mode) {
+        if (currentVideoMode == mode) {
+            setVideoMode(VIDEO_MODE_NONE);
+        } else {
+            setVideoMode(mode);
+        }
+    }
+
+    
+    private synchronized void startVideoStreamingTimer(final String streamId) {
+        stopVideoStreamingTimer();
+        if (streamId == null || currentVideoMode == VIDEO_MODE_NONE) return;
+
+        lastVideoFrameTime = System.currentTimeMillis();
+        captureAndSendVideoFrame(streamId);
+
+        videoTimerRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (currentStreamId != null && currentStreamId.equals(streamId) && currentVideoMode != VIDEO_MODE_NONE) {
+                    lastVideoFrameTime = System.currentTimeMillis();
+                    captureAndSendVideoFrame(streamId);
+                    videoTimerHandler.postDelayed(this, 1000);
+                }
+            }
+        };
+        videoTimerHandler.postDelayed(videoTimerRunnable, 1000);
+    }
+
+    private synchronized void stopVideoStreamingTimer() {
+        if (videoTimerRunnable != null) {
+            videoTimerHandler.removeCallbacks(videoTimerRunnable);
+            videoTimerRunnable = null;
+        }
+    }
+
+    private void setVideoMode(int mode) {
+        currentVideoMode = mode;
+
+        runOnUiThread(() -> {
+            int normalColor = ContextCompat.getColor(this, R.color.text_secondary);
+            int activeColor = ContextCompat.getColor(this, R.color.brand_blue);
+
+            if (btnVideoFront != null) btnVideoFront.setTextColor(mode == VIDEO_MODE_FRONT ? activeColor : normalColor);
+            if (btnVideoBack != null) btnVideoBack.setTextColor(mode == VIDEO_MODE_BACK ? activeColor : normalColor);
+            if (btnVideoScreen != null) btnVideoScreen.setTextColor(mode == VIDEO_MODE_SCREEN ? activeColor : normalColor);
+
+            if (videoPreviewContainer != null) {
+                videoPreviewContainer.setVisibility((mode == VIDEO_MODE_FRONT || mode == VIDEO_MODE_BACK) ? View.VISIBLE : View.GONE);
+            }
+
+            if (tvVideoStatus != null) {
+                switch (mode) {
+                    case VIDEO_MODE_FRONT:
+                        tvVideoStatus.setText("Видео: Фронтальная (1 FPS)");
+                        break;
+                    case VIDEO_MODE_BACK:
+                        tvVideoStatus.setText("Видео: Камера (1 FPS)");
+                        break;
+                    case VIDEO_MODE_SCREEN:
+                        tvVideoStatus.setText("Видео: Экран (1 FPS)");
+                        break;
+                    case VIDEO_MODE_NONE:
+                    default:
+                        tvVideoStatus.setText("Видео: выкл");
+                        break;
+                }
+            }
+        });
+
+        switch (mode) {
+            case VIDEO_MODE_FRONT:
+            case VIDEO_MODE_BACK:
+                startCameraPreview(mode);
+                break;
+            case VIDEO_MODE_SCREEN:
+                startScreenCapture();
+                break;
+            case VIDEO_MODE_NONE:
+            default:
+                stopCamera();
+                stopScreenCapture();
+                break;
+        }
+    }
+
+    private void startCameraPreview(int mode) {
+        stopCamera();
+        stopScreenCapture();
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.CAMERA}, PERMISSIONS_REQUEST_CAMERA);
+            return;
+        }
+
+        startCameraBackgroundThread();
+
+        CameraManager manager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
+        if (manager == null) return;
+
+        try {
+            String targetCameraId = null;
+            int facing = (mode == VIDEO_MODE_FRONT) ? CameraCharacteristics.LENS_FACING_FRONT : CameraCharacteristics.LENS_FACING_BACK;
+
+            for (String id : manager.getCameraIdList()) {
+                CameraCharacteristics characteristics = manager.getCameraCharacteristics(id);
+                Integer lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING);
+                if (lensFacing != null && lensFacing == facing) {
+                    targetCameraId = id;
+                    break;
+                }
+            }
+
+            if (targetCameraId == null && manager.getCameraIdList().length > 0) {
+                targetCameraId = manager.getCameraIdList()[0];
+            }
+
+            if (targetCameraId == null) {
+                Toast.makeText(this, "Камера не найдена", Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            final String selectedCameraId = targetCameraId;
+
+            if (cameraTextureView != null) {
+                if (cameraTextureView.isAvailable()) {
+                    openCameraDevice(manager, selectedCameraId);
+                } else {
+                    cameraTextureView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
+                        @Override
+                        public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
+                            openCameraDevice(manager, selectedCameraId);
+                        }
+                        @Override
+                        public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {}
+                        @Override
+                        public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
+                            stopCamera();
+                            return true;
+                        }
+                        @Override
+                        public void onSurfaceTextureUpdated(SurfaceTexture surface) {}
+                    });
+                }
+            }
+        } catch (Exception e) {
+            Log.e("Camera", "Error setting up camera", e);
+        }
+    }
+
+    private void openCameraDevice(CameraManager manager, String cameraId) {
+        try {
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                return;
+            }
+            manager.openCamera(cameraId, new CameraDevice.StateCallback() {
+                @Override
+                public void onOpened(@NonNull CameraDevice camera) {
+                    cameraDevice = camera;
+                    createCameraPreviewSession();
+                }
+
+                @Override
+                public void onDisconnected(@NonNull CameraDevice camera) {
+                    camera.close();
+                    cameraDevice = null;
+                }
+
+                @Override
+                public void onError(@NonNull CameraDevice camera, int error) {
+                    camera.close();
+                    cameraDevice = null;
+                    Log.e("Camera", "CameraDevice error: " + error);
+                }
+            }, cameraBackgroundHandler);
+        } catch (Exception e) {
+            Log.e("Camera", "Error opening camera device", e);
+        }
+    }
+
+    private void createCameraPreviewSession() {
+        try {
+            if (cameraTextureView == null || cameraDevice == null) return;
+            SurfaceTexture texture = cameraTextureView.getSurfaceTexture();
+            if (texture == null) return;
+
+            texture.setDefaultBufferSize(640, 480);
+            Surface surface = new Surface(texture);
+
+            final CaptureRequest.Builder previewRequestBuilder =
+                    cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+            previewRequestBuilder.addTarget(surface);
+            previewRequestBuilder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
+
+            cameraDevice.createCaptureSession(Collections.singletonList(surface),
+                    new CameraCaptureSession.StateCallback() {
+                        @Override
+                        public void onConfigured(@NonNull CameraCaptureSession session) {
+                            if (cameraDevice == null) return;
+                            cameraCaptureSession = session;
+                            try {
+                                previewRequestBuilder.set(CaptureRequest.CONTROL_AF_MODE,
+                                        CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+                                previewRequestBuilder.set(CaptureRequest.CONTROL_AE_MODE,
+                                        CaptureRequest.CONTROL_AE_MODE_ON);
+                                cameraCaptureSession.setRepeatingRequest(previewRequestBuilder.build(), null, cameraBackgroundHandler);
+                            } catch (Exception e) {
+                                Log.e("Camera", "Error starting camera preview", e);
+                            }
+                        }
+
+                        @Override
+                        public void onConfigureFailed(@NonNull CameraCaptureSession session) {
+                            Log.e("Camera", "Camera configuration failed");
+                        }
+                    }, cameraBackgroundHandler);
+        } catch (Exception e) {
+            Log.e("Camera", "Error creating preview session", e);
+        }
+    }
+
+    private void stopCamera() {
+        try {
+            if (cameraCaptureSession != null) {
+                cameraCaptureSession.stopRepeating();
+                cameraCaptureSession.close();
+                cameraCaptureSession = null;
+            }
+            if (cameraDevice != null) {
+                cameraDevice.close();
+                cameraDevice = null;
+            }
+            stopCameraBackgroundThread();
+        } catch (Exception e) {
+            Log.e("Camera", "Error stopping camera", e);
+        }
+    }
+
+    private void startCameraBackgroundThread() {
+        if (cameraBackgroundThread == null) {
+            cameraBackgroundThread = new HandlerThread("CameraBackground");
+            cameraBackgroundThread.start();
+            cameraBackgroundHandler = new Handler(cameraBackgroundThread.getLooper());
+        }
+    }
+
+    private void stopCameraBackgroundThread() {
+        if (cameraBackgroundThread != null) {
+            cameraBackgroundThread.quitSafely();
+            try {
+                cameraBackgroundThread.join();
+            } catch (InterruptedException e) {
+                Log.e("Camera", "Interrupted stopping camera thread", e);
+            }
+            cameraBackgroundThread = null;
+            cameraBackgroundHandler = null;
+        }
+    }
+
+    private void startScreenCapture() {
+        stopCamera();
+        stopScreenCapture();
+
+        if (screenCaptureIntentData != null && screenCaptureResultCode == RESULT_OK) {
+            initVirtualDisplay();
+        } else {
+            if (mediaProjectionManager == null) {
+                mediaProjectionManager = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+            }
+            if (mediaProjectionManager != null) {
+                startActivityForResult(mediaProjectionManager.createScreenCaptureIntent(), REQUEST_SCREEN_CAPTURE);
+            }
+        }
+    }
+
+    private void initVirtualDisplay() {
+        try {
+            if (mediaProjectionManager == null) {
+                mediaProjectionManager = (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+            }
+            if (mediaProjection == null && mediaProjectionManager != null && screenCaptureIntentData != null) {
+                mediaProjection = mediaProjectionManager.getMediaProjection(screenCaptureResultCode, screenCaptureIntentData);
+            }
+            if (mediaProjection == null) return;
+
+            DisplayMetrics metrics = new DisplayMetrics();
+            getWindowManager().getDefaultDisplay().getMetrics(metrics);
+            int screenWidth = 640;
+            int screenHeight = (int) (640.0 * metrics.heightPixels / metrics.widthPixels);
+            if (screenWidth % 2 != 0) screenWidth--;
+            if (screenHeight % 2 != 0) screenHeight--;
+
+            if (imageReaderScreen != null) {
+                imageReaderScreen.close();
+            }
+            imageReaderScreen = ImageReader.newInstance(screenWidth, screenHeight, PixelFormat.RGBA_8888, 2);
+
+            virtualDisplay = mediaProjection.createVirtualDisplay(
+                    "ScreenCapture",
+                    screenWidth, screenHeight, metrics.densityDpi,
+                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                    imageReaderScreen.getSurface(), null, null
+            );
+
+        } catch (Exception e) {
+            Log.e("ScreenCapture", "Error initializing virtual display", e);
+        }
+    }
+
+    private void stopScreenCapture() {
+        try {
+            if (virtualDisplay != null) {
+                virtualDisplay.release();
+                virtualDisplay = null;
+            }
+            if (imageReaderScreen != null) {
+                imageReaderScreen.close();
+                imageReaderScreen = null;
+            }
+            if (mediaProjection != null) {
+                mediaProjection.stop();
+                mediaProjection = null;
+            }
+        } catch (Exception e) {
+            Log.e("ScreenCapture", "Error stopping screen capture", e);
+        }
+    }
+
+    private void captureAndSendVideoFrame(final String streamId) {
+        if (streamId == null || currentVideoMode == VIDEO_MODE_NONE) return;
+
+        if (currentVideoMode == VIDEO_MODE_SCREEN) {
+            videoExecutor.execute(() -> captureAndSendScreenFrame(streamId));
+        } else if (currentVideoMode == VIDEO_MODE_FRONT || currentVideoMode == VIDEO_MODE_BACK) {
+            runOnUiThread(() -> {
+                if (cameraTextureView != null && cameraTextureView.isAvailable()) {
+                    try {
+                        final Bitmap bitmap = cameraTextureView.getBitmap(640, 480);
+                        if (bitmap != null) {
+                            videoExecutor.execute(() -> {
+                                try {
+                                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                                    bitmap.compress(Bitmap.CompressFormat.JPEG, 60, baos);
+                                    byte[] jpegBytes = baos.toByteArray();
+                                    bitmap.recycle();
+                                    String b64 = Base64.encodeToString(jpegBytes, Base64.NO_WRAP);
+                                    sendVideoChunk(b64, streamId);
+                                } catch (Exception e) {
+                                    Log.e("VideoStream", "Error compressing camera frame", e);
+                                }
+                            });
+                        }
+                    } catch (Exception e) {
+                        Log.e("VideoStream", "Error capturing TextureView bitmap", e);
+                    }
+                }
+            });
+        }
+    }
+
+    private void captureAndSendScreenFrame(String streamId) {
+        if (imageReaderScreen == null) return;
+        Image image = null;
+        try {
+            image = imageReaderScreen.acquireLatestImage();
+            if (image == null) return;
+
+            Image.Plane[] planes = image.getPlanes();
+            ByteBuffer buffer = planes[0].getBuffer();
+            int pixelStride = planes[0].getPixelStride();
+            int rowStride = planes[0].getRowStride();
+            int width = image.getWidth();
+            int height = image.getHeight();
+            int rowPadding = rowStride - pixelStride * width;
+
+            Bitmap bitmap = Bitmap.createBitmap(
+                    width + rowPadding / pixelStride,
+                    height,
+                    Bitmap.Config.ARGB_8888
+            );
+            bitmap.copyPixelsFromBuffer(buffer);
+
+            Bitmap finalBitmap;
+            if (rowPadding != 0) {
+                finalBitmap = Bitmap.createBitmap(bitmap, 0, 0, width, height);
+                bitmap.recycle();
+            } else {
+                finalBitmap = bitmap;
+            }
+
+            Bitmap scaledBitmap;
+            if (width > 640) {
+                int scaledHeight = (int) (height * (640.0f / width));
+                scaledBitmap = Bitmap.createScaledBitmap(finalBitmap, 640, scaledHeight, true);
+                finalBitmap.recycle();
+            } else {
+                scaledBitmap = finalBitmap;
+            }
+
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 60, baos);
+            scaledBitmap.recycle();
+            byte[] jpegBytes = baos.toByteArray();
+            String b64 = Base64.encodeToString(jpegBytes, Base64.NO_WRAP);
+            sendVideoChunk(b64, streamId);
+
+        } catch (Exception e) {
+            Log.e("VideoStream", "Error capturing screen frame", e);
+        } finally {
+            if (image != null) {
+                try { image.close(); } catch (Exception ignored) {}
+            }
+        }
+    }
+
+    private void sendVideoChunk(String b64, String streamId) {
+        if (b64 == null || streamId == null) return;
+        try {
+            JSONObject videoChunk = new JSONObject();
+            videoChunk.put("type", "video_stream_chunk");
+            videoChunk.put("video_base64", b64);
+            videoChunk.put("ui_msg_id", streamId);
+            sendEncodedMessage(videoChunk);
+        } catch (JSONException e) {
+            Log.e("VideoStream", "Error sending video chunk", e);
+        }
+    }
+
 }
