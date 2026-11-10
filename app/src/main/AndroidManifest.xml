@@ -39,9 +39,11 @@
         android:dataExtractionRules="@xml/data_extraction_rules"
         tools:targetApi="s">
 
+        <!-- Точка входа в приложение: авторизация/регистрация -->
         <activity
-            android:name=".FridayActivity"
+            android:name=".LoginActivity"
             android:theme="@style/AppTheme"
+            android:windowSoftInputMode="adjustResize"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -49,8 +51,14 @@
             </intent-filter>
         </activity>
 
+        <!-- Главный экран голосового ассистента и чата -->
+        <activity
+            android:name=".FridayActivity"
+            android:theme="@style/AppTheme"
+            android:windowSoftInputMode="adjustResize"
+            android:exported="false" />
 
-
+        <!-- Восстановление пароля -->
         <activity
             android:name=".RecoveryPasswordActivity"
             android:theme="@style/Theme.AppCompat.Light.DialogWhenLarge"

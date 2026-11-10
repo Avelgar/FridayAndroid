@@ -98,36 +98,24 @@ public class MyForegroundService extends Service {
                 String type = commandMessage.optString("type");
 
                 if ("new_message".equals(type)) {
-                    String sender = commandMessage.optString("sender", "Бот");
                     String originalCommand = commandMessage.optString("original_command", "");
                     String sourceDevice = commandMessage.optString("source_device", "");
                     String userMsgId = commandMessage.optString("user_msg_id", "");
 
-                    // Вывод текста в UI без повторения префикса "Бот:"
+                    // Показ уведомления в системной шторке (UI чата управляется напрямую в FridayActivity)
                     String displayMessageText = commandMessage.optString("text", "").trim();
                     if (!displayMessageText.isEmpty() && !displayMessageText.equals("[Системная команда]")) {
                         String cleanText = displayMessageText;
                         if (cleanText.matches("^(?i)(бот|bot|пятница):\\s*.*")) {
                             cleanText = cleanText.replaceFirst("^(?i)(бот|bot|пятница):\\s*", "");
                         }
-                        final String textToAppend = cleanText;
-                        FridayActivity activity = FridayActivity.getInstance();
-                        if (activity != null) {
-                            activity.runOnUiThread(() -> activity.updateResultText(textToAppend));
-                        }
                         showNotificationWithText(cleanText);
-                    } else if (displayMessageText.isEmpty()) {
-                        // Пустой текст означает конец потоковой передачи текущего сообщения
-                        FridayActivity activity = FridayActivity.getInstance();
-                        if (activity != null) {
-                            activity.runOnUiThread(() -> activity.resetCurrentBotResponse());
-                        }
                     }
 
                     // Воспроизведение Native Audio
                     if (commandMessage.has("audio_base64") && !commandMessage.isNull("audio_base64")) {
                         String audioBase64 = commandMessage.getString("audio_base64");
-                        appendAudioChunk(audioBase64); // <--- Исправлено
+                        appendAudioChunk(audioBase64);
                     }
 
                     boolean needsDataResponse = false;
@@ -301,6 +289,7 @@ public class MyForegroundService extends Service {
             case "открытие ссылки":
                 openLink(actionContent);
                 break;
+            case "открытие файла":
             case "открытие приложения":
                 openAppInBackground(actionContent);
                 break;
@@ -314,10 +303,11 @@ public class MyForegroundService extends Service {
                 closeAppByPackageName(actionContent);
                 break;
             case "музыка":
-                if (actionContent.equals("следующий трек")) controlMediaPlayback("next");
-                else if (actionContent.equals("предыдущий трек")) controlMediaPlayback("previous");
-                else if (actionContent.equals("выключить музыку")) controlMediaPlayback("pause");
-                else if (actionContent.equals("включить музыку")) controlMediaPlayback("play");
+                String mLower = actionContent.toLowerCase();
+                if (mLower.contains("следующ") || mLower.contains("next")) controlMediaPlayback("next");
+                else if (mLower.contains("предыдущ") || mLower.contains("prev")) controlMediaPlayback("previous");
+                else if (mLower.contains("выключ") || mLower.contains("стоп") || mLower.contains("пауз") || mLower.contains("pause")) controlMediaPlayback("pause");
+                else if (mLower.contains("включ") || mLower.contains("игра") || mLower.contains("play")) controlMediaPlayback("play");
                 break;
             case "очистка истории":
             case "очистить историю":

@@ -37,5 +37,7 @@ public class ChatMessage {
 
     public int getType() { return type; }
 
+    public boolean isUser() { return type == TYPE_USER; }
+
     public String getTime() { return time; }
 }

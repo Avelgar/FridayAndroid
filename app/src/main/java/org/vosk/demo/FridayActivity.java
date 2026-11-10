@@ -12,22 +12,35 @@ import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.graphics.Color;
-import android.graphics.Typeface;
+import android.graphics.PixelFormat;
+import android.graphics.SurfaceTexture;
+import android.hardware.camera2.CameraCaptureSession;
+import android.hardware.camera2.CameraCharacteristics;
+import android.hardware.camera2.CameraDevice;
+import android.hardware.camera2.CameraManager;
+import android.hardware.camera2.CameraMetadata;
+import android.hardware.camera2.CaptureRequest;
+import android.hardware.display.DisplayManager;
+import android.hardware.display.VirtualDisplay;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
+import android.media.Image;
+import android.media.ImageReader;
 import android.media.MediaRecorder;
+import android.media.projection.MediaProjection;
+import android.media.projection.MediaProjectionManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.Looper;
 import android.provider.Settings;
-import android.text.TextUtils;
 import android.util.Base64;
+import android.util.DisplayMetrics;
 import android.util.Log;
-import android.util.TypedValue;
-import android.view.Gravity;
+import android.view.Surface;
+import android.view.TextureView;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.widget.AdapterView;
@@ -37,7 +50,6 @@ import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
@@ -62,12 +74,15 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.UnsupportedEncodingException;
+import java.nio.ByteBuffer;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
@@ -76,29 +91,6 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
-import android.graphics.PixelFormat;
-import android.graphics.SurfaceTexture;
-import android.hardware.camera2.CameraCaptureSession;
-import android.hardware.camera2.CameraCharacteristics;
-import android.hardware.camera2.CameraDevice;
-import android.hardware.camera2.CameraManager;
-import android.hardware.camera2.CameraMetadata;
-import android.hardware.camera2.CaptureRequest;
-import android.hardware.display.DisplayManager;
-import android.hardware.display.VirtualDisplay;
-import android.media.Image;
-import android.media.ImageReader;
-import android.media.projection.MediaProjection;
-import android.media.projection.MediaProjectionManager;
-import android.os.HandlerThread;
-import android.util.DisplayMetrics;
-import android.view.Surface;
-import android.view.TextureView;
-import java.nio.ByteBuffer;
-import java.util.Collections;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
 
 public class FridayActivity extends Activity {
 
@@ -117,7 +109,6 @@ public class FridayActivity extends Activity {
 
     private final Handler videoTimerHandler = new Handler(Looper.getMainLooper());
     private Runnable videoTimerRunnable;
-
 
     private TextView tvVideoStatus;
     private View videoPreviewContainer;
@@ -138,17 +129,13 @@ public class FridayActivity extends Activity {
     private Intent screenCaptureIntentData;
     private int screenCaptureResultCode = 0;
 
-
     private static FridayActivity instance;
     private static final int PERMISSIONS_REQUEST_RECORD_AUDIO = 1;
     private static final int PICK_IMAGE_REQUEST = 1001;
 
     private WebSocket webSocket;
-    public boolean isRegistrationWindowOpen = false;
 
     private LinearLayout mainContent;
-    private ScrollView changeDataContent;
-    private ScrollView devicesContent;
     private ScrollView settingsContent;
 
     // Chat UI elements
@@ -184,9 +171,9 @@ public class FridayActivity extends Activity {
 
     // --- Audio Streaming with continuous VAD ---
     private AudioRecord audioRecord;
-    private boolean isRecording = false; // whether recording loop thread is actively capturing
-    private boolean isMicModeActive = false; // whether user turned microphone mode ON with button
-    private String vadState = "idle"; // "idle", "recording", "processing"
+    private boolean isRecording = false;
+    private boolean isMicModeActive = false;
+    private String vadState = "idle";
     private Thread recordingThread = null;
     private String currentStreamId = null;
     private ChatMessage currentVoiceUserMessage = null;
@@ -194,8 +181,8 @@ public class FridayActivity extends Activity {
     private long lastBotSpeakingTime = 0;
 
     // VAD constants (16kHz 16-bit mono PCM: 1 sec = 16000 samples)
-    private static final double VAD_THRESHOLD = 800.0; // amplitude threshold for voice activity
-    private static final int SILENCE_FRAMES_LIMIT = 24000; // 1.5 seconds of silence (16000 * 1.5)
+    private static final double VAD_THRESHOLD = 800.0;
+    private static final int SILENCE_FRAMES_LIMIT = 24000; // 1.5 seconds silence
     private static final int PRE_BUFFER_LIMIT = 8000; // 0.5s pre-buffer
     private final List<Short> preBuffer = new ArrayList<>();
     private final List<Short> pcmBuffer = new ArrayList<>();
@@ -223,8 +210,17 @@ public class FridayActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        instance = this;
 
+        // 1. ПРОВЕРКА АВТОРИЗАЦИИ: если токена нет, сразу перенаправляем на вход
+        String token = getSavedToken();
+        if (token == null || token.trim().isEmpty()) {
+            Intent loginIntent = new Intent(this, LoginActivity.class);
+            startActivity(loginIntent);
+            finish();
+            return;
+        }
+
+        instance = this;
         checkAndCreateSettingsFile();
 
         JSONObject settings = readDataFromFile(this, settingsFileName);
@@ -232,11 +228,13 @@ public class FridayActivity extends Activity {
             if (settings != null && settings.has("name")) {
                 botName = settings.getString("name").toLowerCase();
             }
+            if (settings != null && settings.has("user_login")) {
+                pendingUserLogin = settings.getString("user_login");
+            }
         } catch (JSONException e) {
             e.printStackTrace();
         }
 
-        verifySavedToken();
         initWebSocketConnection();
         startConnectionChecker();
 
@@ -279,7 +277,10 @@ public class FridayActivity extends Activity {
             @Override
             public void onOpen(WebSocket webSocket, Response response) {
                 if (!isDestroyed) {
-                    sendDeviceData();
+                    String token = getSavedToken();
+                    if (token != null && !token.isEmpty()) {
+                        sendAuthMessage(token);
+                    }
                 }
             }
 
@@ -312,36 +313,17 @@ public class FridayActivity extends Activity {
         });
     }
 
-    private void sendDeviceData() {
-        String fileName = "device_data.json";
-        JSONObject deviceData = readDataFromFile(this, fileName);
-
-        if (deviceData == null || !isDataValid(deviceData)) {
-            runOnUiThread(this::openRegistrationWindow);
-        } else {
+    public void sendAuthMessage(String token) {
+        if (webSocket != null && token != null && !token.isEmpty()) {
             try {
-                String deviceName = deviceData.getString("deviceName");
-                String password = deviceData.getString("password");
-                String macAddress = getUniqueDeviceId(this);
-
-                JSONObject deviceInfo = new JSONObject();
-                deviceInfo.put("MAC", macAddress);
-                deviceInfo.put("DeviceName", deviceName);
-                deviceInfo.put("Password", password);
-
-                sendEncodedMessage(deviceInfo);
-
-                String token = getSavedToken();
-                if (token != null && !token.isEmpty()) {
-                    JSONObject accountSync = new JSONObject();
-                    accountSync.put("type", "account_sync");
-                    accountSync.put("token", token);
-                    accountSync.put("mac", macAddress);
-                    sendEncodedMessage(accountSync);
-                }
+                JSONObject auth = new JSONObject();
+                auth.put("type", "auth");
+                auth.put("token", token);
+                auth.put("device_name", getDeviceName());
+                auth.put("device_type", "phone");
+                sendEncodedMessage(auth);
             } catch (JSONException e) {
-                Log.e("Registration", "Error preparing device data", e);
-                runOnUiThread(this::openRegistrationWindow);
+                Log.e("WebSocket", "Error sending auth message", e);
             }
         }
     }
@@ -368,7 +350,6 @@ public class FridayActivity extends Activity {
         try {
             JSONObject pingMessage = new JSONObject();
             pingMessage.put("type", "ping");
-            pingMessage.put("mac", getUniqueDeviceId(this));
             sendEncodedMessage(pingMessage);
         } catch (JSONException e) {
             Log.e("WebSocket", "Error creating ping message", e);
@@ -389,40 +370,6 @@ public class FridayActivity extends Activity {
         }
     }
 
-    private void openRegistrationWindow() {
-        isRegistrationWindowOpen = true;
-        setContentView(R.layout.registration);
-
-        EditText deviceNameEditText = findViewById(R.id.deviceName);
-        EditText passwordEditText = findViewById(R.id.password);
-        Button registrationButton = findViewById(R.id.registration);
-
-        registrationButton.setOnClickListener(view -> {
-            try {
-                String deviceName = deviceNameEditText.getText().toString();
-                String password = passwordEditText.getText().toString();
-                String macAddress = getUniqueDeviceId(this);
-
-                if (deviceName.isEmpty() || password.isEmpty()) {
-                    Toast.makeText(this, "Пожалуйста, заполните все поля.", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-
-                JSONObject deviceInfo = new JSONObject();
-                deviceInfo.put("MAC", macAddress);
-                deviceInfo.put("DeviceName", deviceName);
-                deviceInfo.put("Password", password);
-
-                String jsonString = deviceInfo.toString();
-                byte[] data = jsonString.getBytes("UTF-8");
-                String encodedData = Base64.encodeToString(data, Base64.DEFAULT);
-                webSocket.send(encodedData);
-            } catch (Exception e) {
-                Log.e("Registration", "Error preparing device data", e);
-            }
-        });
-    }
-
     public void handleIncomingMessage(String encodedMessage) {
         runOnUiThread(() -> {
             try {
@@ -441,10 +388,26 @@ public class FridayActivity extends Activity {
                     return;
                 }
 
+                if ("msg_id_map".equals(msgType)) {
+                    String targetUiId = jsonMessage.optString("ui_msg_id", "");
+                    String userMsgId = jsonMessage.optString("user_msg_id", "");
+                    if (!targetUiId.isEmpty() && !userMsgId.isEmpty()) {
+                        for (ChatMessage m : chatMessages) {
+                            if (targetUiId.equals(m.getUiMsgId())) {
+                                m.setId(userMsgId);
+                                break;
+                            }
+                        }
+                    }
+                    return;
+                }
+
                 if ("text_chunk".equals(msgType) || "bot_chunk".equals(msgType)) {
                     String chunkText = jsonMessage.optString("text", "");
+                    String chunkMsgId = jsonMessage.optString("message_id", "");
+                    String chunkUiId = jsonMessage.optString("ui_msg_id", "");
                     if (!chunkText.isEmpty()) {
-                        appendBotResponse(chunkText);
+                        appendBotChunk(chunkText, chunkMsgId, chunkUiId);
                     }
                     return;
                 }
@@ -456,12 +419,34 @@ public class FridayActivity extends Activity {
                     return;
                 }
 
+                if ("dialog_deleted".equals(msgType)) {
+                    String deletedId = jsonMessage.optString("dialog_id", "");
+                    if (!deletedId.isEmpty() && deletedId.equals(currentDialogId)) {
+                        currentDialogId = null;
+                        chatMessages.clear();
+                        if (chatAdapter != null) chatAdapter.notifyDataSetChanged();
+                    }
+                    loadUserDialogs();
+                    return;
+                }
+
                 if ("dialog_renamed".equals(msgType) || "dialog_created".equals(msgType)) {
                     loadUserDialogs();
                     return;
                 }
 
                 if ("delete_message".equals(msgType)) {
+                    String delId = jsonMessage.optString("message_id", jsonMessage.optString("ui_msg_id", ""));
+                    if (!delId.isEmpty()) {
+                        for (int i = 0; i < chatMessages.size(); i++) {
+                            ChatMessage m = chatMessages.get(i);
+                            if (delId.equals(m.getId()) || delId.equals(m.getUiMsgId())) {
+                                chatMessages.remove(i);
+                                if (chatAdapter != null) chatAdapter.notifyItemRemoved(i);
+                                break;
+                            }
+                        }
+                    }
                     if (isMicModeActive) {
                         vadState = "idle";
                     }
@@ -469,49 +454,99 @@ public class FridayActivity extends Activity {
                 }
 
                 if ("new_message".equals(msgType)) {
+                    String msgDialogId = jsonMessage.optString("dialog_id", "");
+                    if (!msgDialogId.isEmpty() && currentDialogId != null && !msgDialogId.equals(currentDialogId)) {
+                        return;
+                    }
+                    if (!msgDialogId.isEmpty() && currentDialogId == null) {
+                        currentDialogId = msgDialogId;
+                    }
+                    String sender = jsonMessage.optString("sender", "Бот");
+                    String text = jsonMessage.optString("text", "");
+                    String targetUiId = jsonMessage.optString("ui_msg_id", "");
+                    String msgId = jsonMessage.optString("message_id", "");
+
+                    boolean isFinal = text.isEmpty() && (!jsonMessage.has("actions") || jsonMessage.optJSONArray("actions") == null || jsonMessage.optJSONArray("actions").length() == 0);
+                    if (isFinal) {
+                        currentBotResponseMsg = null;
+                        if (isMicModeActive) {
+                            vadState = "idle";
+                        }
+                        return;
+                    }
+
+                    if (!text.isEmpty()) {
+                        if ("Вы".equalsIgnoreCase(sender) || "user".equalsIgnoreCase(sender)) {
+                            boolean updated = false;
+                            for (ChatMessage m : chatMessages) {
+                                if (m.getType() == ChatMessage.TYPE_USER && (
+                                        (!targetUiId.isEmpty() && targetUiId.equals(m.getUiMsgId())) ||
+                                        (!msgId.isEmpty() && msgId.equals(m.getId())) ||
+                                        (!msgId.isEmpty() && msgId.equals(m.getUiMsgId())) ||
+                                        (m.getText() != null && (m.getText().contains("[Аудиосообщение]") || m.getText().contains("🎤") || m.getText().contains("⏳")))
+                                )) {
+                                    m.setText(text);
+                                    if (!msgId.isEmpty()) m.setId(msgId);
+                                    updated = true;
+                                    break;
+                                }
+                            }
+                            if (!updated) {
+                                ChatMessage userMsg = ChatMessage.createUser(text);
+                                userMsg.setId(msgId);
+                                userMsg.setUiMsgId(targetUiId);
+                                addChatMessage(userMsg);
+                            } else if (chatAdapter != null) {
+                                chatAdapter.notifyDataSetChanged();
+                                scrollToBottom();
+                            }
+                        } else if ("Действие".equalsIgnoreCase(sender)) {
+                            currentBotResponseMsg = null;
+                            ChatMessage actMsg = ChatMessage.createBot(text);
+                            actMsg.setId(msgId);
+                            addChatMessage(actMsg);
+                        } else {
+                            // Сообщение бота: ищем по ID или добавляем/дополняем
+                            appendBotChunk(text, msgId, targetUiId);
+                        }
+                    }
                     executeInBackground(jsonMessage);
                     return;
                 }
 
                 if ("clear_history".equals(msgType) || "delete_history".equals(msgType)) {
-                    clearGuestHistoryLocally();
+                    chatMessages.clear();
+                    if (chatAdapter != null) chatAdapter.notifyDataSetChanged();
                     return;
                 }
 
-                if (encodedMessage.contains("Имя устройства уже занято.")) {
-                    Toast.makeText(this, "Это имя устройства уже занято. Пожалуйста, выберите другое.", Toast.LENGTH_LONG).show();
-                    if (!isRegistrationWindowOpen) openRegistrationWindow();
-                } else if (encodedMessage.contains("Данные успешно обработаны") || "account_sync_success".equals(msgType) || (jsonMessage.has("user_login") && !jsonMessage.isNull("user_login"))) {
-                    try {
-                        JSONObject jsonData = jsonMessage;
-                        if (isRegistrationWindowOpen) {
-                            EditText deviceNameEditText = findViewById(R.id.deviceName);
-                            EditText passwordEditText = findViewById(R.id.password);
-                            String dName = deviceNameEditText != null ? deviceNameEditText.getText().toString().trim() : "";
-                            String dPass = passwordEditText != null ? passwordEditText.getText().toString().trim() : "";
-                            if (!dName.isEmpty() && !dPass.isEmpty()) {
-                                JSONObject deviceData = new JSONObject();
-                                deviceData.put("deviceName", dName);
-                                deviceData.put("password", dPass);
-                                saveDataToFile(this, "device_data.json", deviceData);
-                            }
-                            Toast.makeText(this, "Устройство успешно зарегистрировано", Toast.LENGTH_LONG).show();
-                            openMainWindow();
-                            sendDeviceData();
-                        }
+                // Сессия истекла или токен недействителен -> перенаправляем на экран входа
+                if ("auth_error".equals(msgType) || encodedMessage.contains("Недействительный токен")) {
+                    saveAuthData(null, null);
+                    pendingUserLogin = null;
+                    Toast.makeText(this, "Сессия истекла. Пожалуйста, выполните вход.", Toast.LENGTH_SHORT).show();
 
+                    Intent intent = new Intent(FridayActivity.this, LoginActivity.class);
+                    intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                    startActivity(intent);
+                    finish();
+                    return;
+                }
+
+                if ("account_sync_success".equals(msgType) || encodedMessage.contains("Данные успешно обработаны") || (jsonMessage.has("user_login") && !jsonMessage.isNull("user_login"))) {
+                    try {
                         String userLogin = null;
-                        if (jsonData.has("user_login") && !jsonData.isNull("user_login")) {
-                            userLogin = jsonData.getString("user_login");
-                        } else if (jsonData.has("login") && !jsonData.isNull("login")) {
-                            userLogin = jsonData.getString("login");
+                        if (jsonMessage.has("user_login") && !jsonMessage.isNull("user_login")) {
+                            userLogin = jsonMessage.getString("user_login");
+                        } else if (jsonMessage.has("login") && !jsonMessage.isNull("login")) {
+                            userLogin = jsonMessage.getString("login");
                         }
 
                         String userToken = null;
-                        if (jsonData.has("token") && !jsonData.isNull("token")) {
-                            userToken = jsonData.getString("token");
-                        } else if (jsonData.has("user_token") && !jsonData.isNull("user_token")) {
-                            userToken = jsonData.getString("user_token");
+                        if (jsonMessage.has("token") && !jsonMessage.isNull("token")) {
+                            userToken = jsonMessage.getString("token");
+                        } else if (jsonMessage.has("user_token") && !jsonMessage.isNull("user_token")) {
+                            userToken = jsonMessage.getString("user_token");
                         }
 
                         if (userLogin != null && !userLogin.trim().isEmpty()) {
@@ -524,25 +559,22 @@ public class FridayActivity extends Activity {
                             if (userToken != null && !userToken.trim().isEmpty()) {
                                 loadUserDialogs();
                             }
-                            if (jsonData.has("history")) {
-                                pendingHistory = jsonData.getJSONArray("history").toString();
+                            if (jsonMessage.has("history")) {
+                                pendingHistory = jsonMessage.getJSONArray("history").toString();
                                 if (mainContent != null && mainContent.getVisibility() == View.VISIBLE) {
                                     displayHistory(pendingHistory);
                                 }
                             }
                         } else {
-                            // Без аккаунта (гость): игнорируем историю от сервера, читаем строго локальную
                             updateUserUI();
-                            loadGuestHistory();
                         }
                     } catch (JSONException e) {
                         Log.e("SyncHandler", "Error processing sync data", e);
                     }
                 } else {
-                    // Check if it's a general response message only if text is provided
                     String respText = jsonMessage.optString("response", jsonMessage.optString("text", ""));
                     if (!respText.isEmpty()) {
-                        appendBotResponse(respText);
+                        appendBotChunk(respText, "", "");
                     }
                 }
             } catch (JSONException e) {
@@ -553,12 +585,9 @@ public class FridayActivity extends Activity {
 
     @SuppressLint("WrongViewCast")
     private void openMainWindow() {
-        isRegistrationWindowOpen = false;
         setContentView(R.layout.main);
 
         mainContent = findViewById(R.id.main_content);
-        changeDataContent = findViewById(R.id.change_data_content);
-        devicesContent = findViewById(R.id.devices_content);
         settingsContent = findViewById(R.id.settings_content);
 
         // Header dialog controls
@@ -567,20 +596,11 @@ public class FridayActivity extends Activity {
         if (btnNewDialog != null) btnNewDialog.setOnClickListener(v -> createNewDialog());
         if (btnDeleteDialog != null) btnDeleteDialog.setOnClickListener(v -> deleteCurrentDialog());
 
-        ImageButton btnClearHistory = findViewById(R.id.btn_clear_history);
-        if (btnClearHistory != null) {
-            btnClearHistory.setOnClickListener(v -> confirmClearHistory());
-        }
-
         // Nav bar buttons
         View navMain = findViewById(R.id.nav_main);
-        View navData = findViewById(R.id.nav_data);
-        View navDevices = findViewById(R.id.nav_devices);
         View navSettings = findViewById(R.id.nav_settings);
 
         if (navMain != null) navMain.setOnClickListener(v -> showMainContent());
-        if (navData != null) navData.setOnClickListener(v -> showChangeDataContent());
-        if (navDevices != null) navDevices.setOnClickListener(v -> showDevicesContent());
         if (navSettings != null) navSettings.setOnClickListener(v -> showSettingsContent());
 
         // RecyclerView Setup for Chat Messages
@@ -632,7 +652,6 @@ public class FridayActivity extends Activity {
         if (btnVideoBack != null) btnVideoBack.setOnClickListener(v -> toggleVideoMode(VIDEO_MODE_BACK));
         if (btnVideoScreen != null) btnVideoScreen.setOnClickListener(v -> toggleVideoMode(VIDEO_MODE_SCREEN));
 
-
         showMainContent();
 
         if (!isMyServiceRunning(MyForegroundService.class)) {
@@ -651,15 +670,10 @@ public class FridayActivity extends Activity {
                 pendingHistory = null;
             }
             loadUserDialogs();
-        } else {
-            pendingHistory = null;
-            loadGuestHistory();
         }
     }
 
     private void updateUserUI() {
-        Button btnRegister = findViewById(R.id.btn_register);
-        Button btnLogin = findViewById(R.id.btn_login);
         Button btnUserProfile = findViewById(R.id.btn_user_profile);
         LinearLayout dialogsLayout = findViewById(R.id.dialogs_layout);
 
@@ -670,42 +684,27 @@ public class FridayActivity extends Activity {
                 savedLogin = settings.optString("user_login");
             }
         }
+        if (savedLogin == null || savedLogin.isEmpty()) {
+            savedLogin = "Профиль";
+        }
 
         ImageButton btnClearHistory = findViewById(R.id.btn_clear_history);
-        if (savedLogin != null && !savedLogin.isEmpty()) {
-            if (btnClearHistory != null) btnClearHistory.setVisibility(View.GONE);
-            if (btnUserProfile != null) {
-                btnUserProfile.setText(savedLogin);
-                btnUserProfile.setVisibility(View.VISIBLE);
-                final String currentLogin = savedLogin;
-                btnUserProfile.setOnClickListener(v -> {
-                    new AlertDialog.Builder(this)
-                            .setTitle("Выход из аккаунта")
-                            .setMessage("Вы уверены, что хотите выйти из аккаунта " + currentLogin + "?")
-                            .setPositiveButton("Выйти", (dialog, which) -> logoutUser())
-                            .setNegativeButton("Отмена", null)
-                            .show();
-                });
-            }
-            if (btnRegister != null) btnRegister.setVisibility(View.GONE);
-            if (btnLogin != null) btnLogin.setVisibility(View.GONE);
-            if (dialogsLayout != null) dialogsLayout.setVisibility(View.VISIBLE);
-        } else {
-            if (btnRegister != null) {
-                btnRegister.setVisibility(View.VISIBLE);
-                btnRegister.setOnClickListener(v -> showRegistrationDialog());
-            }
-            if (btnLogin != null) {
-                btnLogin.setVisibility(View.VISIBLE);
-                btnLogin.setOnClickListener(v -> showLoginDialog());
-            }
-            if (btnUserProfile != null) btnUserProfile.setVisibility(View.GONE);
-            if (dialogsLayout != null) dialogsLayout.setVisibility(View.GONE);
-            if (btnClearHistory != null) {
-                btnClearHistory.setVisibility(View.VISIBLE);
-                btnClearHistory.setOnClickListener(v -> confirmClearHistory());
-            }
+        if (btnClearHistory != null) btnClearHistory.setVisibility(View.GONE);
+
+        if (btnUserProfile != null) {
+            btnUserProfile.setText(savedLogin);
+            btnUserProfile.setVisibility(View.VISIBLE);
+            final String currentLogin = savedLogin;
+            btnUserProfile.setOnClickListener(v -> {
+                new AlertDialog.Builder(this)
+                        .setTitle("Выход из аккаунта")
+                        .setMessage("Вы уверены, что хотите выйти из аккаунта " + currentLogin + "?")
+                        .setPositiveButton("Выйти", (dialog, which) -> logoutUser())
+                        .setNegativeButton("Отмена", null)
+                        .show();
+            });
         }
+        if (dialogsLayout != null) dialogsLayout.setVisibility(View.VISIBLE);
     }
 
     private boolean isMyServiceRunning(Class<?> serviceClass) {
@@ -737,6 +736,10 @@ public class FridayActivity extends Activity {
                 Uri selectedUri = data.getData();
                 handleSelectedImage(selectedUri);
             }
+        } else if (requestCode == REQUEST_SCREEN_CAPTURE && resultCode == RESULT_OK) {
+            screenCaptureResultCode = resultCode;
+            screenCaptureIntentData = data;
+            initVirtualDisplay();
         }
     }
 
@@ -783,6 +786,19 @@ public class FridayActivity extends Activity {
         return null;
     }
 
+    public String getDeviceName() {
+        JSONObject settings = readDataFromFile(this, settingsFileName);
+        if (settings != null && settings.has("device_name")) {
+            String customName = settings.optString("device_name").trim();
+            if (!customName.isEmpty()) return customName;
+        }
+        String model = Build.MODEL;
+        if (model == null || model.trim().isEmpty()) {
+            return "Android Phone";
+        }
+        return model;
+    }
+
     public String getSelectedVoice() {
         JSONObject settings = readDataFromFile(this, settingsFileName);
         if (settings != null && settings.has("voice_type")) {
@@ -809,46 +825,12 @@ public class FridayActivity extends Activity {
         }
     }
 
-    private void verifySavedToken() {
-        String token = getSavedToken();
-        if (token == null || token.isEmpty()) return;
-
-        new Thread(() -> {
-            try {
-                OkHttpClient httpClient = new OkHttpClient();
-                Request request = new Request.Builder()
-                        .url("https://friday-assistant.ru/verify_token?token=" + token)
-                        .get()
-                        .build();
-
-                Response response = httpClient.newCall(request).execute();
-                String respStr = response.body().string();
-                JSONObject json = new JSONObject(respStr);
-                if ("success".equals(json.optString("status"))) {
-                    pendingUserLogin = json.optString("user_login");
-                    saveAuthData(token, pendingUserLogin);
-                    runOnUiThread(() -> {
-                        updateUserUI();
-                        loadUserDialogs();
-                    });
-                } else {
-                    saveAuthData(null, null);
-                    pendingUserLogin = null;
-                    runOnUiThread(() -> updateUserUI());
-                }
-            } catch (Exception e) {
-                Log.e("VerifyToken", "Error verifying token", e);
-            }
-        }).start();
-    }
-
     private void addChatMessage(ChatMessage msg) {
         chatMessages.add(msg);
         if (chatAdapter != null) {
             chatAdapter.notifyItemInserted(chatMessages.size() - 1);
             scrollToBottom();
         }
-        saveGuestHistory();
     }
 
     private void sendTextMessage() {
@@ -856,12 +838,15 @@ public class FridayActivity extends Activity {
         if (message.isEmpty() && selectedImageBitmap == null) return;
 
         try {
+            String localUiId = "msg_" + System.currentTimeMillis();
             JSONObject messageJson = new JSONObject();
             messageJson.put("command", message);
-            messageJson.put("mac", getUniqueDeviceId(this));
             messageJson.put("name", botName);
             messageJson.put("type", "текстовое сообщение");
             messageJson.put("voice_type", getSelectedVoice());
+            messageJson.put("device_name", getDeviceName());
+            messageJson.put("device_type", "phone");
+            messageJson.put("ui_msg_id", localUiId);
 
             if (currentDialogId != null && !currentDialogId.isEmpty()) {
                 messageJson.put("dialog_id", currentDialogId);
@@ -881,13 +866,11 @@ public class FridayActivity extends Activity {
 
             sendEncodedMessage(messageJson);
 
-            // Add user message to RecyclerView
             ChatMessage userMsg = ChatMessage.createUser(message.isEmpty() ? "[Фото]" : message);
+            userMsg.setUiMsgId(localUiId);
             addChatMessage(userMsg);
 
-            // Prepare bot response holder
             currentBotResponseMsg = null;
-
             messageEditText.setText("");
             removeSelectedPhoto();
 
@@ -911,21 +894,26 @@ public class FridayActivity extends Activity {
             try {
                 JSONArray historyArray = new JSONArray(historyJson);
                 chatMessages.clear();
+                currentBotResponseMsg = null;
 
                 for (int i = 0; i < historyArray.length(); i++) {
                     JSONObject message = historyArray.getJSONObject(i);
                     String sender = message.optString("sender", "");
                     String text = message.optString("text", "");
+                    String msgId = message.optString("id", "");
 
                     if (sender.isEmpty() || text.isEmpty()) continue;
 
                     boolean isUser = sender.equalsIgnoreCase("user") || sender.equalsIgnoreCase("пользователь") || sender.equalsIgnoreCase("вы");
                     if (isUser) {
-                        chatMessages.add(ChatMessage.createUser(text));
+                        ChatMessage uMsg = ChatMessage.createUser(text);
+                        uMsg.setId(msgId);
+                        chatMessages.add(uMsg);
                     } else {
-                        // Clean bot prefix if present in stored history
                         String cleanBotText = text.replaceAll("(?i)(^|\\n)(бот|bot|пятница):\\s*", "$1").trim();
-                        chatMessages.add(ChatMessage.createBot(cleanBotText));
+                        ChatMessage bMsg = ChatMessage.createBot(cleanBotText);
+                        bMsg.setId(msgId);
+                        chatMessages.add(bMsg);
                     }
                 }
                 if (chatAdapter != null) chatAdapter.notifyDataSetChanged();
@@ -939,10 +927,6 @@ public class FridayActivity extends Activity {
     private void updateNavSelection(int selectedTab) {
         ImageView mainIcon = findViewById(R.id.main_btn_icon);
         TextView mainText = findViewById(R.id.main_btn);
-        ImageView dataIcon = findViewById(R.id.data_window_btn_icon);
-        TextView dataText = findViewById(R.id.data_window_btn);
-        ImageView devicesIcon = findViewById(R.id.devices_btn_icon);
-        TextView devicesText = findViewById(R.id.devices_btn);
         ImageView settingsIcon = findViewById(R.id.settings_btn_icon);
         TextView settingsText = findViewById(R.id.settings_btn);
 
@@ -952,352 +936,24 @@ public class FridayActivity extends Activity {
         if (mainIcon != null) mainIcon.setColorFilter(selectedTab == 0 ? selectedColor : unselectedColor);
         if (mainText != null) mainText.setTextColor(selectedTab == 0 ? selectedColor : unselectedColor);
 
-        if (dataIcon != null) dataIcon.setColorFilter(selectedTab == 1 ? selectedColor : unselectedColor);
-        if (dataText != null) dataText.setTextColor(selectedTab == 1 ? selectedColor : unselectedColor);
-
-        if (devicesIcon != null) devicesIcon.setColorFilter(selectedTab == 2 ? selectedColor : unselectedColor);
-        if (devicesText != null) devicesText.setTextColor(selectedTab == 2 ? selectedColor : unselectedColor);
-
-        if (settingsIcon != null) settingsIcon.setColorFilter(selectedTab == 3 ? selectedColor : unselectedColor);
-        if (settingsText != null) settingsText.setTextColor(selectedTab == 3 ? selectedColor : unselectedColor);
+        if (settingsIcon != null) settingsIcon.setColorFilter(selectedTab == 1 ? selectedColor : unselectedColor);
+        if (settingsText != null) settingsText.setTextColor(selectedTab == 1 ? selectedColor : unselectedColor);
     }
 
     private void showMainContent() {
         if (mainContent != null) mainContent.setVisibility(View.VISIBLE);
-        if (changeDataContent != null) changeDataContent.setVisibility(View.GONE);
-        if (devicesContent != null) devicesContent.setVisibility(View.GONE);
         if (settingsContent != null) settingsContent.setVisibility(View.GONE);
         updateNavSelection(0);
     }
 
-    private void showDevicesContent() {
-        if (mainContent != null) mainContent.setVisibility(View.GONE);
-        if (changeDataContent != null) changeDataContent.setVisibility(View.GONE);
-        if (devicesContent != null) devicesContent.setVisibility(View.VISIBLE);
-        if (settingsContent != null) settingsContent.setVisibility(View.GONE);
-        updateNavSelection(2);
-
-        Button connectDeviceBtn = findViewById(R.id.btn_connect_device);
-        LinearLayout accountDevicesContainer = findViewById(R.id.account_devices_container);
-        LinearLayout connectedDevicesContainer = findViewById(R.id.connected_devices_container);
-
-        if (accountDevicesContainer != null) accountDevicesContainer.removeAllViews();
-        if (connectedDevicesContainer != null) connectedDevicesContainer.removeAllViews();
-
-        if (connectDeviceBtn != null) connectDeviceBtn.setOnClickListener(v -> showConnectDeviceDialog());
-
-        String macAddress = getUniqueDeviceId(this);
-
-        new Thread(() -> {
-            try {
-                OkHttpClient httpClient = new OkHttpClient();
-                MediaType JSON = MediaType.parse("application/json; charset=utf-8");
-
-                JSONObject json = new JSONObject();
-                json.put("mac", macAddress);
-
-                RequestBody body = RequestBody.create(JSON, json.toString());
-                Request request = new Request.Builder()
-                        .url("https://friday-assistant.ru/get_devices")
-                        .post(body)
-                        .build();
-
-                Response response = httpClient.newCall(request).execute();
-                String responseBody = response.body().string();
-
-                runOnUiThread(() -> {
-                    try {
-                        JSONObject jsonResponse = new JSONObject(responseBody);
-
-                        if (jsonResponse.getString("status").equals("success")) {
-                            JSONArray accountDevices = jsonResponse.getJSONArray("account_devices");
-                            for (int i = 0; i < accountDevices.length(); i++) {
-                                JSONObject device = accountDevices.getJSONObject(i);
-                                addDeviceView(accountDevicesContainer, device, true);
-                            }
-
-                            JSONArray myDevices = jsonResponse.getJSONArray("my_devices");
-                            for (int i = 0; i < myDevices.length(); i++) {
-                                JSONObject device = myDevices.getJSONObject(i);
-                                addDeviceView(connectedDevicesContainer, device, false);
-                            }
-                        } else {
-                            Toast.makeText(this, "Ошибка: " + jsonResponse.optString("message", "Неизвестная ошибка"),
-                                    Toast.LENGTH_SHORT).show();
-                        }
-                    } catch (JSONException e) {
-                        e.printStackTrace();
-                        Toast.makeText(this, "Ошибка обработки ответа сервера", Toast.LENGTH_SHORT).show();
-                    }
-                });
-            } catch (Exception e) {
-                runOnUiThread(() -> {
-                    Toast.makeText(this, "Ошибка при загрузке устройств", Toast.LENGTH_SHORT).show();
-                });
-                e.printStackTrace();
-            }
-        }).start();
-    }
-
-    private void addDeviceView(LinearLayout container, JSONObject device, boolean isAccountDevice) {
-        if (container == null) return;
-        try {
-            LinearLayout deviceLayout = new LinearLayout(this);
-            deviceLayout.setOrientation(LinearLayout.HORIZONTAL);
-
-            LinearLayout.LayoutParams itemParams = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT);
-            int margin = (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 10, getResources().getDisplayMetrics());
-            itemParams.setMargins(0, 0, 0, margin);
-            deviceLayout.setLayoutParams(itemParams);
-
-            deviceLayout.setPadding(28, 24, 28, 24);
-            deviceLayout.setBackgroundResource(R.drawable.device_item_background);
-
-            String deviceName = device.optString("DeviceName", "Неизвестное устройство");
-            String macAddress = device.optString("MacAddress", "MAC не указан");
-            boolean isOnline = device.optBoolean("IsOnline", false);
-
-            float textWeight = isAccountDevice ? 1.0f : 0.7f;
-
-            LinearLayout textContainer = new LinearLayout(this);
-            textContainer.setOrientation(LinearLayout.VERTICAL);
-            textContainer.setLayoutParams(new LinearLayout.LayoutParams(
-                    0,
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    textWeight));
-            textContainer.setPadding(0, 0, 16, 0);
-
-            // Контрастные цвета из палитры темы для белого фона карточки
-            int textColor = ContextCompat.getColor(this, R.color.text_primary);
-            int macTextColor = ContextCompat.getColor(this, R.color.text_secondary);
-            int textSize = 16;
-            int macTextSize = 13;
-
-            TextView nameView = new TextView(this);
-            nameView.setLayoutParams(new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT));
-            nameView.setText(deviceName);
-            nameView.setTextColor(textColor);
-            nameView.setTextSize(TypedValue.COMPLEX_UNIT_SP, textSize);
-            nameView.setTypeface(null, Typeface.BOLD);
-            nameView.setSingleLine(false);
-            nameView.setMaxLines(2);
-            nameView.setEllipsize(TextUtils.TruncateAt.END);
-            textContainer.addView(nameView);
-
-            LinearLayout statusContainer = new LinearLayout(this);
-            statusContainer.setOrientation(LinearLayout.HORIZONTAL);
-            LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT);
-            statusParams.topMargin = (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 4, getResources().getDisplayMetrics());
-            statusContainer.setLayoutParams(statusParams);
-
-            TextView macView = new TextView(this);
-            macView.setLayoutParams(new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT));
-            macView.setText(macAddress);
-            macView.setTextColor(macTextColor);
-            macView.setTextSize(TypedValue.COMPLEX_UNIT_SP, macTextSize);
-            macView.setSingleLine(true);
-            macView.setEllipsize(TextUtils.TruncateAt.MIDDLE);
-            statusContainer.addView(macView);
-
-            TextView separator = new TextView(this);
-            separator.setLayoutParams(new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT));
-            separator.setText(" — ");
-            separator.setTextColor(macTextColor);
-            separator.setTextSize(TypedValue.COMPLEX_UNIT_SP, macTextSize);
-            statusContainer.addView(separator);
-
-            TextView statusView = new TextView(this);
-            statusView.setLayoutParams(new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT));
-            statusView.setText(isOnline ? "онлайн" : "офлайн");
-            statusView.setTextColor(isOnline ? ContextCompat.getColor(this, R.color.online_green) : ContextCompat.getColor(this, R.color.offline_red));
-            statusView.setTextSize(TypedValue.COMPLEX_UNIT_SP, macTextSize);
-            statusView.setTypeface(null, Typeface.BOLD);
-            statusContainer.addView(statusView);
-
-            textContainer.addView(statusContainer);
-            deviceLayout.addView(textContainer);
-
-            if (!isAccountDevice) {
-                Button disconnectBtn = new Button(this);
-                LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.WRAP_CONTENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT);
-                btnParams.gravity = Gravity.CENTER_VERTICAL;
-                disconnectBtn.setLayoutParams(btnParams);
-
-                disconnectBtn.setText("Отключить");
-                disconnectBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-                disconnectBtn.setPadding(16, 8, 16, 8);
-                disconnectBtn.setBackgroundResource(R.drawable.disconnect_button_bg);
-                disconnectBtn.setTextColor(Color.WHITE);
-
-                disconnectBtn.setOnClickListener(v -> {
-                    try {
-                        String macToDisconnect = device.optString("MacAddress", "");
-                        if (!macToDisconnect.isEmpty()) {
-                            disconnectDevice(macToDisconnect);
-                        }
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
-                });
-                deviceLayout.addView(disconnectBtn);
-            }
-
-            container.addView(deviceLayout);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-
-    private void disconnectDevice(String macAddress) {
-        new Thread(() -> {
-            try {
-                OkHttpClient httpClient = new OkHttpClient();
-                MediaType JSON = MediaType.parse("application/json; charset=utf-8");
-
-                JSONObject json = new JSONObject();
-                json.put("requester_mac", getUniqueDeviceId(this));
-                json.put("target_mac", macAddress);
-
-                RequestBody body = RequestBody.create(JSON, json.toString());
-                Request request = new Request.Builder()
-                        .url("https://friday-assistant.ru/disconnect_device")
-                        .post(body)
-                        .build();
-
-                Response response = httpClient.newCall(request).execute();
-                String responseBody = response.body().string();
-
-                runOnUiThread(() -> {
-                    try {
-                        JSONObject jsonResponse = new JSONObject(responseBody);
-                        if (jsonResponse.getString("status").equals("success")) {
-                            Toast.makeText(this, "Устройство отключено", Toast.LENGTH_SHORT).show();
-                            showDevicesContent();
-                        } else {
-                            Toast.makeText(this, "Ошибка: " + jsonResponse.optString("message", "Не удалось отключить устройство"),
-                                    Toast.LENGTH_SHORT).show();
-                        }
-                    } catch (JSONException e) {
-                        e.printStackTrace();
-                    }
-                });
-
-            } catch (Exception e) {
-                runOnUiThread(() -> Toast.makeText(this, "Ошибка при отключении устройства", Toast.LENGTH_SHORT).show());
-                e.printStackTrace();
-            }
-        }).start();
-    }
-
-    private void showConnectDeviceDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        View dialogView = getLayoutInflater().inflate(R.layout.dialog_connect_device, null);
-        builder.setView(dialogView);
-        AlertDialog dialog = builder.create();
-        dialog.show();
-
-        EditText etDeviceName = dialogView.findViewById(R.id.et_device_name);
-        EditText etDevicePassword = dialogView.findViewById(R.id.et_device_password);
-        Button btnConnect = dialogView.findViewById(R.id.btn_connect);
-        ProgressBar progressBar = dialogView.findViewById(R.id.progress_bar);
-        TextView tvResponse = dialogView.findViewById(R.id.tv_response);
-
-        btnConnect.setOnClickListener(v -> {
-            String deviceName = etDeviceName.getText().toString().trim();
-            String password = etDevicePassword.getText().toString().trim();
-
-            if (deviceName.isEmpty() || password.isEmpty()) {
-                tvResponse.setText("Заполните все поля");
-                tvResponse.setTextColor(Color.RED);
-                tvResponse.setVisibility(View.VISIBLE);
-                return;
-            }
-
-            progressBar.setVisibility(View.VISIBLE);
-            btnConnect.setVisibility(View.GONE);
-            tvResponse.setVisibility(View.GONE);
-
-            connectToDevice(deviceName, password, (success, message) -> {
-                runOnUiThread(() -> {
-                    progressBar.setVisibility(View.GONE);
-                    btnConnect.setVisibility(View.VISIBLE);
-
-                    tvResponse.setText(message);
-                    tvResponse.setTextColor(success ? Color.GREEN : Color.RED);
-                    tvResponse.setVisibility(View.VISIBLE);
-
-                    if (success) {
-                        new Handler().postDelayed(() -> {
-                            showDevicesContent();
-                            dialog.dismiss();
-                        }, 1000);
-                    }
-                });
-            });
-        });
-    }
-
-    public interface ConnectDeviceCallback {
-        void onComplete(boolean success, String message);
-    }
-
-    private void connectToDevice(String deviceName, String password, ConnectDeviceCallback callback) {
-        new Thread(() -> {
-            try {
-                OkHttpClient httpClient = new OkHttpClient();
-                MediaType JSON = MediaType.parse("application/json; charset=utf-8");
-
-                JSONObject json = new JSONObject();
-                json.put("MAC", getUniqueDeviceId(this));
-                json.put("DeviceName", deviceName);
-                json.put("Password", password);
-
-                RequestBody body = RequestBody.create(JSON, json.toString());
-                Request request = new Request.Builder()
-                        .url("https://friday-assistant.ru/connect_device")
-                        .post(body)
-                        .build();
-
-                Response response = httpClient.newCall(request).execute();
-                String responseBody = response.body().string();
-                JSONObject jsonResponse = new JSONObject(responseBody);
-
-                if (jsonResponse.getString("status").equals("success")) {
-                    callback.onComplete(true, "Устройство успешно подключено!");
-                } else {
-                    String errorMsg = jsonResponse.optString("message", "Неизвестная ошибка");
-                    callback.onComplete(false, "Ошибка: " + errorMsg);
-                }
-            } catch (Exception e) {
-                e.printStackTrace();
-                callback.onComplete(false, "Ошибка подключения: " + e.getMessage());
-            }
-        }).start();
-    }
-
     private void showSettingsContent() {
         if (mainContent != null) mainContent.setVisibility(View.GONE);
-        if (changeDataContent != null) changeDataContent.setVisibility(View.GONE);
-        if (devicesContent != null) devicesContent.setVisibility(View.GONE);
         if (settingsContent != null) settingsContent.setVisibility(View.VISIBLE);
-        updateNavSelection(3);
+        updateNavSelection(1);
 
         Spinner voiceSpinner = findViewById(R.id.bot_voice_spinner);
-        Button saveVoiceBtn = findViewById(R.id.save_bot_voice_btn);
+        EditText etDeviceName = findViewById(R.id.et_device_name);
+        Button saveBtn = findViewById(R.id.save_bot_voice_btn);
 
         String currentVoice = getSelectedVoice();
         String[] voiceKeys = new String[]{"Aoede", "Puck", "Kore", "Charon"};
@@ -1310,276 +966,58 @@ public class FridayActivity extends Activity {
             }
         }
 
-        if (saveVoiceBtn != null) {
-            saveVoiceBtn.setOnClickListener(v -> {
-                if (voiceSpinner != null) {
-                    int pos = voiceSpinner.getSelectedItemPosition();
-                    if (pos >= 0 && pos < voiceKeys.length) {
-                        String selectedVoiceKey = voiceKeys[pos];
-                        try {
-                            JSONObject settings = readDataFromFile(this, settingsFileName);
-                            if (settings == null) settings = new JSONObject();
-                            settings.put("voice_type", selectedVoiceKey);
-                            saveDataToFile(this, settingsFileName, settings);
-                            Toast.makeText(this, "Голос сохранен: " + selectedVoiceKey, Toast.LENGTH_SHORT).show();
-                        } catch (JSONException e) {
-                            e.printStackTrace();
-                            Toast.makeText(this, "Ошибка сохранения настроек", Toast.LENGTH_SHORT).show();
+        if (etDeviceName != null) {
+            etDeviceName.setText(getDeviceName());
+        }
+
+        if (saveBtn != null) {
+            saveBtn.setOnClickListener(v -> {
+                try {
+                    JSONObject settings = readDataFromFile(this, settingsFileName);
+                    if (settings == null) settings = new JSONObject();
+
+                    if (voiceSpinner != null) {
+                        int pos = voiceSpinner.getSelectedItemPosition();
+                        if (pos >= 0 && pos < voiceKeys.length) {
+                            settings.put("voice_type", voiceKeys[pos]);
                         }
                     }
-                }
-            });
-        }
-    }
 
-    private void showChangeDataContent() {
-        if (mainContent != null) mainContent.setVisibility(View.GONE);
-        if (changeDataContent != null) changeDataContent.setVisibility(View.VISIBLE);
-        if (devicesContent != null) devicesContent.setVisibility(View.GONE);
-        if (settingsContent != null) settingsContent.setVisibility(View.GONE);
-        updateNavSelection(1);
+                    if (etDeviceName != null) {
+                        String newName = etDeviceName.getText().toString().trim();
+                        if (!newName.isEmpty()) {
+                            settings.put("device_name", newName);
+                        } else {
+                            settings.remove("device_name");
+                        }
+                    }
 
-        String fileName = "device_data.json";
-        JSONObject deviceData = readDataFromFile(this, fileName);
-        try {
-            if (deviceData != null) {
-                String deviceName = deviceData.optString("deviceName", "");
-                String password = deviceData.optString("password", "");
+                    saveDataToFile(this, settingsFileName, settings);
+                    Toast.makeText(this, "Настройки сохранены", Toast.LENGTH_SHORT).show();
 
-                EditText deviceNameEditText = findViewById(R.id.deviceNameChange);
-                EditText passwordEditText = findViewById(R.id.passwordChange);
-
-                if (deviceNameEditText != null) deviceNameEditText.setText(deviceName);
-                if (passwordEditText != null) passwordEditText.setText(password);
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-
-        Button changeButton = findViewById(R.id.change_data);
-        if (changeButton != null) {
-            changeButton.setOnClickListener(view -> {
-                EditText deviceNameEditText = findViewById(R.id.deviceNameChange);
-                EditText passwordEditText = findViewById(R.id.passwordChange);
-                String deviceName = deviceNameEditText.getText().toString();
-                String password = passwordEditText.getText().toString();
-
-                if (deviceName.isEmpty() || password.isEmpty()) {
-                    Toast.makeText(this, "Пожалуйста, заполните все поля.", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-
-                JSONObject jsonData = new JSONObject();
-                try {
-                    jsonData.put("deviceName", deviceName);
-                    jsonData.put("password", password);
+                    String token = getSavedToken();
+                    if (token != null && !token.isEmpty()) {
+                        sendAuthMessage(token);
+                    }
                 } catch (JSONException e) {
                     e.printStackTrace();
+                    Toast.makeText(this, "Ошибка сохранения настроек", Toast.LENGTH_SHORT).show();
                 }
-                saveDataToFile(this, "device_data.json", jsonData);
-                Toast.makeText(this, "Перезапустите приложение, чтобы подтвердить данные", Toast.LENGTH_LONG).show();
             });
         }
-    }
-
-    private void showRegistrationDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        View dialogView = getLayoutInflater().inflate(R.layout.dialog_register, null);
-        builder.setView(dialogView);
-        builder.setTitle("Регистрация");
-        builder.setCancelable(true);
-
-        EditText etEmail = dialogView.findViewById(R.id.etEmail);
-        EditText etLogin = dialogView.findViewById(R.id.etLogin);
-        EditText etPassword = dialogView.findViewById(R.id.etPassword);
-        EditText etConfirmPassword = dialogView.findViewById(R.id.etConfirmPassword);
-        TextView tvServerResponse = dialogView.findViewById(R.id.tvServerResponse);
-        Button btnRegister = dialogView.findViewById(R.id.btnRegister);
-
-        AlertDialog dialog = builder.create();
-
-        btnRegister.setOnClickListener(v -> {
-            String email = etEmail.getText().toString().trim();
-            String login = etLogin.getText().toString().trim();
-            String password = etPassword.getText().toString();
-            String confirmPassword = etConfirmPassword.getText().toString();
-
-            if (email.isEmpty() || login.isEmpty() || password.isEmpty() || confirmPassword.isEmpty()) {
-                tvServerResponse.setText("Все поля обязательны для заполнения");
-                return;
-            }
-
-            if (!password.equals(confirmPassword)) {
-                tvServerResponse.setText("Пароли не совпадают");
-                return;
-            }
-
-            registerUser(email, login, password, dialog, tvServerResponse);
-        });
-
-        dialog.show();
-    }
-
-    private void registerUser(String email, String login, String password, AlertDialog dialog, TextView tvResponse) {
-        new Thread(() -> {
-            try {
-                OkHttpClient httpClient = new OkHttpClient();
-                MediaType JSON = MediaType.parse("application/json; charset=utf-8");
-
-                JSONObject json = new JSONObject();
-                json.put("email", email);
-                json.put("login", login);
-                json.put("password", password);
-                json.put("mac", getUniqueDeviceId(this));
-
-                RequestBody body = RequestBody.create(JSON, json.toString());
-                Request request = new Request.Builder()
-                        .url("https://friday-assistant.ru/register")
-                        .post(body)
-                        .build();
-
-                Response response = httpClient.newCall(request).execute();
-                String responseBody = response.body().string();
-
-                runOnUiThread(() -> {
-                    try {
-                        JSONObject jsonResponse = new JSONObject(responseBody);
-                        if (jsonResponse.getString("status").equals("success")) {
-                            pendingUserLogin = login;
-                            String token = jsonResponse.optString("token");
-                            saveAuthData(token, pendingUserLogin);
-
-                            Toast.makeText(this, jsonResponse.getString("message"), Toast.LENGTH_LONG).show();
-                            dialog.dismiss();
-                            openMainWindow();
-                            loadUserDialogs();
-                        } else {
-                            tvResponse.setText(jsonResponse.getString("message"));
-                        }
-                    } catch (JSONException e) {
-                        tvResponse.setText("Ошибка обработки ответа сервера");
-                        e.printStackTrace();
-                    }
-                });
-
-            } catch (Exception e) {
-                runOnUiThread(() -> tvResponse.setText("Ошибка при отправке запроса: " + e.getMessage()));
-                e.printStackTrace();
-            }
-        }).start();
-    }
-
-    private void showLoginDialog() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        View dialogView = getLayoutInflater().inflate(R.layout.dialog_login, null);
-        builder.setView(dialogView);
-        builder.setTitle("Вход");
-        builder.setCancelable(true);
-
-        EditText etLoginOrEmail = dialogView.findViewById(R.id.etLoginOrEmail);
-        EditText etPassword = dialogView.findViewById(R.id.etPassword);
-        TextView tvForgotPassword = dialogView.findViewById(R.id.tvForgotPassword);
-        TextView tvServerResponse = dialogView.findViewById(R.id.tvServerResponse);
-        Button btnLogin = dialogView.findViewById(R.id.btnLogin);
-
-        AlertDialog dialog = builder.create();
-
-        tvForgotPassword.setOnClickListener(v -> {
-            dialog.dismiss();
-            Intent intent = new Intent(FridayActivity.this, RecoveryPasswordActivity.class);
-            startActivity(intent);
-        });
-
-        btnLogin.setOnClickListener(v -> {
-            String loginOrEmail = etLoginOrEmail.getText().toString().trim();
-            String password = etPassword.getText().toString();
-
-            if (loginOrEmail.isEmpty() || password.isEmpty()) {
-                tvServerResponse.setText("Все поля обязательны для заполнения");
-                return;
-            }
-
-            loginUser(loginOrEmail, password, dialog, tvServerResponse);
-        });
-
-        dialog.show();
-    }
-
-    private void loginUser(String loginOrEmail, String password, AlertDialog dialog, TextView tvResponse) {
-        new Thread(() -> {
-            try {
-                OkHttpClient httpClient = new OkHttpClient();
-                MediaType JSON = MediaType.parse("application/json; charset=utf-8");
-
-                JSONObject json = new JSONObject();
-                json.put("login", loginOrEmail);
-                json.put("password", password);
-                json.put("mac", getUniqueDeviceId(this));
-
-                RequestBody body = RequestBody.create(JSON, json.toString());
-                Request request = new Request.Builder()
-                        .url("https://friday-assistant.ru/login")
-                        .post(body)
-                        .build();
-
-                Response response = httpClient.newCall(request).execute();
-                String responseBody = response.body().string();
-
-                runOnUiThread(() -> {
-                    try {
-                        JSONObject jsonResponse = new JSONObject(responseBody);
-                        if (jsonResponse.getString("status").equals("success")) {
-                            pendingUserLogin = jsonResponse.optString("user_login");
-                            String token = jsonResponse.optString("token");
-                            saveAuthData(token, pendingUserLogin);
-
-                            if (token != null && !token.isEmpty()) {
-                                try {
-                                    JSONObject syncMsg = new JSONObject();
-                                    syncMsg.put("type", "account_sync");
-                                    syncMsg.put("token", token);
-                                    syncMsg.put("mac", getUniqueDeviceId(this));
-                                    sendEncodedMessage(syncMsg);
-                                } catch (Exception e) {}
-                            }
-
-                            Toast.makeText(this, jsonResponse.getString("message"), Toast.LENGTH_LONG).show();
-                            dialog.dismiss();
-                            openMainWindow();
-                            loadUserDialogs();
-                        } else {
-                            tvResponse.setText(jsonResponse.getString("message"));
-                        }
-                    } catch (JSONException e) {
-                        tvResponse.setText("Ошибка обработки ответа сервера");
-                        e.printStackTrace();
-                    }
-                });
-
-            } catch (Exception e) {
-                runOnUiThread(() -> tvResponse.setText("Ошибка при отправке запроса: " + e.getMessage()));
-                e.printStackTrace();
-            }
-        }).start();
     }
 
     private void logoutUser() {
         new Thread(() -> {
             try {
-                String macAddress = getUniqueDeviceId(this);
-
                 OkHttpClient httpClient = new OkHttpClient();
                 MediaType JSON = MediaType.parse("application/json; charset=utf-8");
-
                 JSONObject json = new JSONObject();
-                json.put("MAC", macAddress);
-
                 RequestBody body = RequestBody.create(JSON, json.toString());
                 Request request = new Request.Builder()
                         .url("https://friday-assistant.ru/logout")
                         .post(body)
                         .build();
-
                 httpClient.newCall(request).execute();
             } catch (Exception e) {
                 e.printStackTrace();
@@ -1592,8 +1030,18 @@ public class FridayActivity extends Activity {
                     chatMessages.clear();
                     if (chatAdapter != null) chatAdapter.notifyDataSetChanged();
                     Toast.makeText(this, "Выход из аккаунта выполнен", Toast.LENGTH_SHORT).show();
-                    openMainWindow();
-                    loadGuestHistory();
+
+                    if (webSocket != null) {
+                        try { webSocket.close(1000, "Logout"); } catch (Exception e) {}
+                        webSocket = null;
+                    }
+
+                    stopService(new Intent(this, MyForegroundService.class));
+
+                    Intent intent = new Intent(FridayActivity.this, LoginActivity.class);
+                    intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
+                    startActivity(intent);
+                    finish();
                 });
             }
         }).start();
@@ -1603,8 +1051,6 @@ public class FridayActivity extends Activity {
     private void loadUserDialogs() {
         String token = getSavedToken();
         if (token == null || token.isEmpty()) {
-            LinearLayout dialogsLayout = findViewById(R.id.dialogs_layout);
-            if (dialogsLayout != null) dialogsLayout.setVisibility(View.GONE);
             return;
         }
 
@@ -1638,39 +1084,75 @@ public class FridayActivity extends Activity {
                                 ));
                             }
 
+                            boolean hasChats = !userDialogs.isEmpty();
+                            if (!hasChats) {
+                                currentDialogId = null;
+                                chatMessages.clear();
+                                if (chatAdapter != null) chatAdapter.notifyDataSetChanged();
+                                userDialogs.add(new DialogItem("", "Нет диалогов"));
+                            }
+
                             LinearLayout dialogsLayout = findViewById(R.id.dialogs_layout);
                             if (dialogsLayout != null) dialogsLayout.setVisibility(View.VISIBLE);
 
                             Spinner dialogSpinner = findViewById(R.id.dialog_spinner);
                             if (dialogSpinner != null) {
+                                // 1. Проверяем, существует ли все еще выбранный диалог в новом списке
+                                int targetPos = -1;
+                                if (currentDialogId != null) {
+                                    for (int i = 0; i < userDialogs.size(); i++) {
+                                        if (userDialogs.get(i).id.equals(currentDialogId)) {
+                                            targetPos = i;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                // 2. Отключаем слушатель перед установкой нового адаптера (чтобы не триггерился onItemSelected 0)
+                                dialogSpinner.setOnItemSelectedListener(null);
+
                                 ArrayAdapter<DialogItem> adapter = new ArrayAdapter<>(
                                         this, android.R.layout.simple_spinner_item, userDialogs
                                 );
                                 adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
                                 dialogSpinner.setAdapter(adapter);
 
+                                if (targetPos >= 0) {
+                                    dialogSpinner.setSelection(targetPos, false);
+                                    if (currentDialogTitle != null) {
+                                        currentDialogTitle.setText(userDialogs.get(targetPos).name);
+                                    }
+                                } else if (hasChats && currentDialogId == null) {
+                                    currentDialogId = userDialogs.get(0).id;
+                                    dialogSpinner.setSelection(0, false);
+                                    if (currentDialogTitle != null) {
+                                        currentDialogTitle.setText(userDialogs.get(0).name);
+                                    }
+                                    loadDialogHistory(currentDialogId);
+                                } else if (!hasChats) {
+                                    dialogSpinner.setSelection(0, false);
+                                    if (currentDialogTitle != null) currentDialogTitle.setText("Нет диалогов");
+                                }
+
+                                // 3. Вешаем слушатель обратно
                                 dialogSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
                                     @Override
                                     public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                                         if (position >= 0 && position < userDialogs.size()) {
-                                            currentDialogId = userDialogs.get(position).id;
-                                            if (currentDialogTitle != null) {
-                                                currentDialogTitle.setText(userDialogs.get(position).name);
+                                            String selectedId = userDialogs.get(position).id;
+                                            if (selectedId != null && !selectedId.isEmpty() && !selectedId.equals(currentDialogId)) {
+                                                currentDialogId = selectedId;
+                                                if (currentDialogTitle != null) {
+                                                    currentDialogTitle.setText(userDialogs.get(position).name);
+                                                }
+                                                loadDialogHistory(currentDialogId);
                                             }
-                                            loadDialogHistory(currentDialogId);
                                         }
                                     }
 
                                     @Override
                                     public void onNothingSelected(AdapterView<?> parent) {}
                                 });
-
-                                if (!userDialogs.isEmpty() && currentDialogId == null) {
-                                    currentDialogId = userDialogs.get(0).id;
-                                    if (currentDialogTitle != null) {
-                                        currentDialogTitle.setText(userDialogs.get(0).name);
-                                    }
-                                }
                             }
                         }
                     } catch (JSONException e) {
@@ -1692,7 +1174,6 @@ public class FridayActivity extends Activity {
                 MediaType JSON = MediaType.parse("application/json; charset=utf-8");
                 JSONObject json = new JSONObject();
                 json.put("token", token);
-                // Chat name will be dynamically set by facade model on first message!
                 json.put("name", "Новый чат");
 
                 RequestBody body = RequestBody.create(JSON, json.toString());
@@ -1705,7 +1186,15 @@ public class FridayActivity extends Activity {
                 String respStr = response.body().string();
                 JSONObject respJson = new JSONObject(respStr);
                 if ("success".equals(respJson.optString("status"))) {
-                    runOnUiThread(() -> loadUserDialogs());
+                    String newId = respJson.optString("dialog_id", "");
+                    runOnUiThread(() -> {
+                        if (!newId.isEmpty()) {
+                            currentDialogId = newId;
+                            chatMessages.clear();
+                            if (chatAdapter != null) chatAdapter.notifyDataSetChanged();
+                        }
+                        loadUserDialogs();
+                    });
                 }
             } catch (Exception e) {
                 Log.e("Dialogs", "Error creating dialog", e);
@@ -1714,7 +1203,7 @@ public class FridayActivity extends Activity {
     }
 
     private void deleteCurrentDialog() {
-        if (currentDialogId == null) return;
+        if (currentDialogId == null || currentDialogId.trim().isEmpty()) return;
         new AlertDialog.Builder(this)
                 .setTitle("Удаление чата")
                 .setMessage("Вы уверены, что хотите удалить этот чат?")
@@ -1738,8 +1227,13 @@ public class FridayActivity extends Activity {
                             String respStr = response.body().string();
                             JSONObject respJson = new JSONObject(respStr);
                             if ("success".equals(respJson.optString("status"))) {
-                                currentDialogId = null;
-                                runOnUiThread(() -> loadUserDialogs());
+                                runOnUiThread(() -> {
+                                    currentDialogId = null;
+                                    chatMessages.clear();
+                                    currentBotResponseMsg = null;
+                                    if (chatAdapter != null) chatAdapter.notifyDataSetChanged();
+                                    loadUserDialogs();
+                                });
                             }
                         } catch (Exception e) {
                             Log.e("Dialogs", "Error deleting dialog", e);
@@ -1778,10 +1272,6 @@ public class FridayActivity extends Activity {
         }).start();
     }
 
-    public String getUniqueDeviceId(Context context) {
-        return Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ANDROID_ID);
-    }
-
     public void saveDataToFile(Context context, String fileName, JSONObject jsonData) {
         try (FileOutputStream fos = context.openFileOutput(fileName, Context.MODE_PRIVATE)) {
             fos.write(jsonData.toString().getBytes());
@@ -1800,14 +1290,6 @@ public class FridayActivity extends Activity {
             return new JSONObject(jsonString.toString());
         } catch (IOException | JSONException e) {
             return null;
-        }
-    }
-
-    public boolean isDataValid(JSONObject deviceData) {
-        try {
-            return deviceData.has("deviceName") && deviceData.has("password");
-        } catch (Exception e) {
-            return false;
         }
     }
 
@@ -1873,7 +1355,7 @@ public class FridayActivity extends Activity {
     public void onDestroy() {
         isDestroyed = true;
         stopAudioRecording();
-                stopCamera();
+        stopCamera();
         stopScreenCapture();
         if (videoExecutor != null) {
             videoExecutor.shutdown();
@@ -1903,11 +1385,9 @@ public class FridayActivity extends Activity {
         }
 
         if (isMicModeActive) {
-            // User manually turns microphone OFF
             isMicModeActive = false;
             stopAudioRecording();
         } else {
-            // User turns microphone ON
             isMicModeActive = true;
             vadState = "idle";
             startAudioRecording();
@@ -1970,7 +1450,6 @@ public class FridayActivity extends Activity {
                     int read = audioRecord.read(sampleBuffer, 0, sampleBuffer.length);
                     if (read <= 0) continue;
 
-                    // If bot is speaking or just finished speaking within 600ms, mute input
                     if (isBotSpeaking || (System.currentTimeMillis() - lastBotSpeakingTime < 600)) {
                         silenceSamples = 0;
                         continue;
@@ -1980,7 +1459,6 @@ public class FridayActivity extends Activity {
                         continue;
                     }
 
-                    // Calculate average volume (RMS / absolute mean)
                     long sum = 0;
                     for (int i = 0; i < read; i++) {
                         sum += Math.abs((int) sampleBuffer[i]);
@@ -1998,7 +1476,6 @@ public class FridayActivity extends Activity {
                         }
 
                         if (volume > VAD_THRESHOLD) {
-                            // Speech detected! Start streaming
                             vadState = "recording";
                             silenceSamples = 0;
                             currentStreamId = "stream_" + System.currentTimeMillis();
@@ -2018,14 +1495,14 @@ public class FridayActivity extends Activity {
                                 currentBotResponseMsg = null;
                             });
 
-                            // Send start stream command
                             try {
                                 JSONObject startCmd = new JSONObject();
                                 startCmd.put("command", "");
                                 startCmd.put("stream_audio", true);
                                 startCmd.put("ui_msg_id", currentStreamId);
                                 startCmd.put("voice_type", getSelectedVoice());
-                                startCmd.put("mac", getUniqueDeviceId(this));
+                                startCmd.put("device_name", getDeviceName());
+                                startCmd.put("device_type", "phone");
                                 if (currentDialogId != null && !currentDialogId.isEmpty()) {
                                     startCmd.put("dialog_id", currentDialogId);
                                 }
@@ -2038,7 +1515,6 @@ public class FridayActivity extends Activity {
                                 Log.e("AudioStream", "Error sending start command", e);
                             }
 
-                            // Send pre-buffered chunk
                             sendShortBufferChunk();
 
                             if (currentVideoMode != VIDEO_MODE_NONE) {
@@ -2066,7 +1542,6 @@ public class FridayActivity extends Activity {
                         if (volume < VAD_THRESHOLD) {
                             silenceSamples += read;
                             if (silenceSamples > SILENCE_FRAMES_LIMIT) {
-                                // User finished speaking!
                                 vadState = "processing";
                                 silenceSamples = 0;
                                 stopVideoStreamingTimer();
@@ -2079,7 +1554,6 @@ public class FridayActivity extends Activity {
                                     }
                                 });
 
-                                // Send stream end
                                 if (currentStreamId != null) {
                                     try {
                                         JSONObject endMsg = new JSONObject();
@@ -2169,101 +1643,89 @@ public class FridayActivity extends Activity {
     }
 
     private void updateVoiceUserMessage(String uiMsgId, String transcribedText) {
+        if (transcribedText == null || transcribedText.trim().isEmpty()) return;
         runOnUiThread(() -> {
-            if (currentVoiceUserMessage != null && (uiMsgId == null || uiMsgId.isEmpty() || uiMsgId.equals(currentVoiceUserMessage.getUiMsgId()))) {
-                currentVoiceUserMessage.setText(transcribedText);
-            } else if (uiMsgId != null && !uiMsgId.isEmpty()) {
+            boolean updated = false;
+            if (uiMsgId != null && !uiMsgId.isEmpty()) {
                 for (ChatMessage msg : chatMessages) {
-                    if (uiMsgId.equals(msg.getUiMsgId())) {
+                    if (msg.getType() == ChatMessage.TYPE_USER && (uiMsgId.equals(msg.getUiMsgId()) || uiMsgId.equals(msg.getId()))) {
                         msg.setText(transcribedText);
+                        updated = true;
                         break;
                     }
                 }
+            }
+            if (!updated && currentVoiceUserMessage != null) {
+                currentVoiceUserMessage.setText(transcribedText);
+                updated = true;
             }
             if (chatAdapter != null) chatAdapter.notifyDataSetChanged();
             scrollToBottom();
         });
     }
 
-    private void appendBotResponse(String chunkText) {
+    private void appendBotChunk(String chunkText, String msgId, String uiMsgId) {
         if (chunkText == null || chunkText.isEmpty()) return;
 
-        // Удаляем префикс "Бот: ", если сервер или сторонний источник его присылает
         String cleaned = chunkText.replaceAll("(?i)(^|\\n)(бот|bot|пятница):\\s*", "$1").trim();
         if (cleaned.isEmpty()) return;
 
         runOnUiThread(() -> {
-            if (currentBotResponseMsg == null) {
-                currentBotResponseMsg = ChatMessage.createBot(cleaned);
-                addChatMessage(currentBotResponseMsg);
+            // 1. Ищем существующее сообщение бота по msgId или uiMsgId
+            ChatMessage targetBotMsg = null;
+            if (msgId != null && !msgId.isEmpty()) {
+                for (ChatMessage m : chatMessages) {
+                    if (m.getType() == ChatMessage.TYPE_BOT && msgId.equals(m.getId())) {
+                        targetBotMsg = m;
+                        break;
+                    }
+                }
+            }
+            if (targetBotMsg == null && uiMsgId != null && !uiMsgId.isEmpty()) {
+                for (ChatMessage m : chatMessages) {
+                    if (m.getType() == ChatMessage.TYPE_BOT && uiMsgId.equals(m.getUiMsgId())) {
+                        targetBotMsg = m;
+                        break;
+                    }
+                }
+            }
+            if (targetBotMsg == null && currentBotResponseMsg != null) {
+                targetBotMsg = currentBotResponseMsg;
+            }
+
+            if (targetBotMsg == null) {
+                targetBotMsg = ChatMessage.createBot(cleaned);
+                if (msgId != null && !msgId.isEmpty()) targetBotMsg.setId(msgId);
+                if (uiMsgId != null && !uiMsgId.isEmpty()) targetBotMsg.setUiMsgId(uiMsgId);
+                currentBotResponseMsg = targetBotMsg;
+                addChatMessage(targetBotMsg);
             } else {
-                String existing = currentBotResponseMsg.getText();
+                if (msgId != null && !msgId.isEmpty() && targetBotMsg.getId() == null) {
+                    targetBotMsg.setId(msgId);
+                }
+                String existing = targetBotMsg.getText();
                 if (existing != null && !existing.isEmpty()) {
                     if (!existing.endsWith(" ") && !existing.endsWith("\n") && !cleaned.startsWith(" ") && !cleaned.startsWith("\n")) {
-                        currentBotResponseMsg.setText(existing + " " + cleaned);
+                        targetBotMsg.setText(existing + " " + cleaned);
                     } else {
-                        currentBotResponseMsg.setText(existing + cleaned);
+                        targetBotMsg.setText(existing + cleaned);
                     }
                 } else {
-                    currentBotResponseMsg.setText(cleaned);
+                    targetBotMsg.setText(cleaned);
                 }
+                currentBotResponseMsg = targetBotMsg;
                 if (chatAdapter != null) chatAdapter.notifyDataSetChanged();
                 scrollToBottom();
             }
-            saveGuestHistory();
         });
     }
 
     public void resetCurrentBotResponse() {
         currentBotResponseMsg = null;
-        saveGuestHistory();
     }
 
-    private static final String GUEST_HISTORY_FILE = "guest_history.json";
-
-    private void saveGuestHistory() {
-        String token = getSavedToken();
-        if (token != null && !token.isEmpty()) return;
-        if (pendingUserLogin != null && !pendingUserLogin.isEmpty()) return;
-
-        try {
-            JSONArray array = new JSONArray();
-            for (ChatMessage msg : chatMessages) {
-                JSONObject obj = new JSONObject();
-                obj.put("sender", msg.getType() == ChatMessage.TYPE_USER ? "user" : "bot");
-                obj.put("text", msg.getText());
-                array.put(obj);
-            }
-            JSONObject root = new JSONObject();
-            root.put("history", array);
-            saveDataToFile(this, GUEST_HISTORY_FILE, root);
-        } catch (Exception e) {
-            Log.e("GuestHistory", "Error saving guest history", e);
-        }
-    }
-
-    private void loadGuestHistory() {
-        String token = getSavedToken();
-        if (token != null && !token.isEmpty()) return;
-        if (pendingUserLogin != null && !pendingUserLogin.isEmpty()) return;
-
-        JSONObject root = readDataFromFile(this, GUEST_HISTORY_FILE);
-        if (root != null && root.has("history")) {
-            try {
-                displayHistory(root.getJSONArray("history").toString());
-            } catch (Exception e) {
-                Log.e("GuestHistory", "Error loading guest history", e);
-            }
-        }
-    }
-
-    private void confirmClearHistory() {
-        new AlertDialog.Builder(this)
-                .setTitle("Очистить историю")
-                .setMessage("Вы уверены, что хотите удалить историю сообщений?")
-                .setPositiveButton("Очистить", (dialog, which) -> clearGuestHistoryLocally())
-                .setNegativeButton("Отмена", null)
-                .show();
+    public void updateResultText(String text) {
+        appendBotChunk(text, "", "");
     }
 
     public void clearGuestHistoryLocally() {
@@ -2271,11 +1733,6 @@ public class FridayActivity extends Activity {
             chatMessages.clear();
             currentBotResponseMsg = null;
             pendingHistory = null;
-            try {
-                JSONObject empty = new JSONObject();
-                empty.put("history", new JSONArray());
-                saveDataToFile(this, GUEST_HISTORY_FILE, empty);
-            } catch (Exception e) {}
             if (chatAdapter != null) {
                 chatAdapter.notifyDataSetChanged();
             }
@@ -2283,16 +1740,11 @@ public class FridayActivity extends Activity {
         });
     }
 
-    public void updateResultText(String text) {
-        appendBotResponse(text);
-    }
-
     private void scrollToBottom() {
         if (chatRecyclerView != null && chatAdapter != null && chatAdapter.getItemCount() > 0) {
             chatRecyclerView.smoothScrollToPosition(chatAdapter.getItemCount() - 1);
         }
     }
-
 
     // ==========================================
     // VIDEO STREAMING (Camera / Screen Capture)
@@ -2329,7 +1781,6 @@ public class FridayActivity extends Activity {
         }
     }
 
-    
     private synchronized void startVideoStreamingTimer(final String streamId) {
         stopVideoStreamingTimer();
         if (streamId == null || currentVideoMode == VIDEO_MODE_NONE) return;
@@ -2748,5 +2199,4 @@ public class FridayActivity extends Activity {
             Log.e("VideoStream", "Error sending video chunk", e);
         }
     }
-
 }

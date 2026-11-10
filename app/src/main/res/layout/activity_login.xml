@@ -1,0 +1,334 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_dark">
+
+    <ScrollView
+        android:id="@+id/scroll_login_content"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingStart="24dp"
+            android:paddingEnd="24dp"
+            android:paddingTop="36dp"
+            android:paddingBottom="36dp"
+            android:gravity="center_horizontal">
+
+            <!-- App Brand Header -->
+            <ImageView
+                android:layout_width="64dp"
+                android:layout_height="64dp"
+                android:src="@drawable/logo"
+                android:contentDescription="Логотип Пятница"
+                android:layout_marginBottom="12dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Пятница"
+                android:textColor="@color/graphite"
+                android:textSize="24sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="ГОЛОСОВОЙ ПОМОЩНИК"
+                android:textColor="@color/brand_blue_dark"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:letterSpacing="0.1"
+                android:layout_marginTop="2dp"
+                android:layout_marginBottom="28dp" />
+
+            <!-- Tabs: Вход / Регистрация -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="44dp"
+                android:orientation="horizontal"
+                android:background="@drawable/input_background"
+                android:padding="3dp"
+                android:layout_marginBottom="20dp">
+
+                <Button
+                    android:id="@+id/tab_login"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:text="Вход"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/white"
+                    android:background="@drawable/button_background" />
+
+                <Button
+                    android:id="@+id/tab_register"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:text="Регистрация"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/graphite_soft"
+                    android:background="@android:color/transparent" />
+            </LinearLayout>
+
+            <!-- Card Container -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="@drawable/device_item_background"
+                android:padding="20dp">
+
+                <!-- ========== LOGIN FORM ========== -->
+                <LinearLayout
+                    android:id="@+id/layout_login_form"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="visible">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Почта или логин"
+                        android:textColor="@color/graphite_soft"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:layout_marginBottom="6dp" />
+
+                    <EditText
+                        android:id="@+id/et_login_user"
+                        android:layout_width="match_parent"
+                        android:layout_height="48dp"
+                        android:hint="name@example.com или логин"
+                        android:textColorHint="@color/muted_light"
+                        android:textColor="@color/graphite"
+                        android:textSize="14sp"
+                        android:background="@drawable/input_background"
+                        android:paddingStart="14dp"
+                        android:paddingEnd="14dp"
+                        android:inputType="textEmailAddress" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Пароль"
+                        android:textColor="@color/graphite_soft"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:layout_marginTop="14dp"
+                        android:layout_marginBottom="6dp" />
+
+                    <EditText
+                        android:id="@+id/et_login_password"
+                        android:layout_width="match_parent"
+                        android:layout_height="48dp"
+                        android:hint="Введите пароль"
+                        android:textColorHint="@color/muted_light"
+                        android:textColor="@color/graphite"
+                        android:textSize="14sp"
+                        android:background="@drawable/input_background"
+                        android:paddingStart="14dp"
+                        android:paddingEnd="14dp"
+                        android:inputType="textPassword" />
+
+                    <TextView
+                        android:id="@+id/tv_forgot_password"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Забыли пароль?"
+                        android:textColor="@color/brand_blue_dark"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:layout_gravity="end"
+                        android:layout_marginTop="10dp"
+                        android:padding="4dp"
+                        android:clickable="true"
+                        android:focusable="true" />
+
+                    <Button
+                        android:id="@+id/btn_submit_login"
+                        android:layout_width="match_parent"
+                        android:layout_height="48dp"
+                        android:text="Войти"
+                        android:textColor="@color/white"
+                        android:textSize="14sp"
+                        android:textStyle="bold"
+                        android:background="@drawable/button_background"
+                        android:layout_marginTop="18dp" />
+                </LinearLayout>
+
+                <!-- ========== REGISTER FORM ========== -->
+                <LinearLayout
+                    android:id="@+id/layout_register_form"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Электронная почта"
+                        android:textColor="@color/graphite_soft"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:layout_marginBottom="6dp" />
+
+                    <EditText
+                        android:id="@+id/et_reg_email"
+                        android:layout_width="match_parent"
+                        android:layout_height="48dp"
+                        android:hint="name@example.com"
+                        android:textColorHint="@color/muted_light"
+                        android:textColor="@color/graphite"
+                        android:textSize="14sp"
+                        android:background="@drawable/input_background"
+                        android:paddingStart="14dp"
+                        android:paddingEnd="14dp"
+                        android:inputType="textEmailAddress" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Логин"
+                        android:textColor="@color/graphite_soft"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:layout_marginTop="14dp"
+                        android:layout_marginBottom="6dp" />
+
+                    <EditText
+                        android:id="@+id/et_reg_login"
+                        android:layout_width="match_parent"
+                        android:layout_height="48dp"
+                        android:hint="Ваш логин"
+                        android:textColorHint="@color/muted_light"
+                        android:textColor="@color/graphite"
+                        android:textSize="14sp"
+                        android:background="@drawable/input_background"
+                        android:paddingStart="14dp"
+                        android:paddingEnd="14dp"
+                        android:inputType="text" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Пароль"
+                        android:textColor="@color/graphite_soft"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:layout_marginTop="14dp"
+                        android:layout_marginBottom="6dp" />
+
+                    <EditText
+                        android:id="@+id/et_reg_password"
+                        android:layout_width="match_parent"
+                        android:layout_height="48dp"
+                        android:hint="Не менее 6 символов"
+                        android:textColorHint="@color/muted_light"
+                        android:textColor="@color/graphite"
+                        android:textSize="14sp"
+                        android:background="@drawable/input_background"
+                        android:paddingStart="14dp"
+                        android:paddingEnd="14dp"
+                        android:inputType="textPassword" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Повторите пароль"
+                        android:textColor="@color/graphite_soft"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:layout_marginTop="14dp"
+                        android:layout_marginBottom="6dp" />
+
+                    <EditText
+                        android:id="@+id/et_reg_confirm_password"
+                        android:layout_width="match_parent"
+                        android:layout_height="48dp"
+                        android:hint="Введите пароль ещё раз"
+                        android:textColorHint="@color/muted_light"
+                        android:textColor="@color/graphite"
+                        android:textSize="14sp"
+                        android:background="@drawable/input_background"
+                        android:paddingStart="14dp"
+                        android:paddingEnd="14dp"
+                        android:inputType="textPassword" />
+
+                    <Button
+                        android:id="@+id/btn_submit_register"
+                        android:layout_width="match_parent"
+                        android:layout_height="48dp"
+                        android:text="Зарегистрироваться"
+                        android:textColor="@color/white"
+                        android:textSize="14sp"
+                        android:textStyle="bold"
+                        android:background="@drawable/button_background"
+                        android:layout_marginTop="18dp" />
+                </LinearLayout>
+
+                <!-- Feedback & Loading -->
+                <TextView
+                    android:id="@+id/tv_auth_error"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:textColor="@color/danger"
+                    android:textSize="13sp"
+                    android:gravity="center"
+                    android:visibility="gone" />
+
+                <ProgressBar
+                    android:id="@+id/pb_auth_loading"
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:layout_gravity="center_horizontal"
+                    android:layout_marginTop="12dp"
+                    android:visibility="gone" />
+
+            </LinearLayout>
+
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- Splash loading overlay for token auto-verification -->
+    <LinearLayout
+        android:id="@+id/layout_splash_loading"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:background="@color/bg_dark"
+        android:gravity="center"
+        android:visibility="gone">
+
+        <ImageView
+            android:layout_width="72dp"
+            android:layout_height="72dp"
+            android:src="@drawable/logo"
+            android:contentDescription="Пятница"
+            android:layout_marginBottom="16dp" />
+
+        <ProgressBar
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_marginBottom="12dp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Вход в аккаунт..."
+            android:textColor="@color/graphite_soft"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+</FrameLayout>

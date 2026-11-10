@@ -72,30 +72,6 @@
                     </LinearLayout>
                 </LinearLayout>
 
-                <Button
-                    android:id="@+id/btn_register"
-                    android:layout_width="wrap_content"
-                    android:layout_height="36dp"
-                    android:text="Регистрация"
-                    android:textColor="@color/text_primary"
-                    android:textSize="12sp"
-                    android:background="@drawable/button_background"
-                    android:paddingStart="12dp"
-                    android:paddingEnd="12dp"
-                    android:visibility="gone"
-                    android:layout_marginEnd="8dp" />
-
-                <Button
-                    android:id="@+id/btn_login"
-                    android:layout_width="wrap_content"
-                    android:layout_height="36dp"
-                    android:text="Войти"
-                    android:textColor="@color/text_primary"
-                    android:textSize="12sp"
-                    android:background="@drawable/button_background"
-                    android:paddingStart="12dp"
-                    android:paddingEnd="12dp"
-                    android:visibility="gone" />
 
                 <Button
                     android:id="@+id/btn_user_profile"
@@ -217,7 +193,7 @@
                 android:tint="@color/text_secondary" />
         </LinearLayout>
 
-                <!-- Video control / toolbar row -->
+        <!-- Video control / toolbar row -->
         <LinearLayout
             android:id="@+id/video_control_bar"
             android:layout_width="match_parent"
@@ -308,7 +284,7 @@
 
         </LinearLayout>
 
-<!-- Input row -->
+        <!-- Input row -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -388,158 +364,6 @@
 
     </LinearLayout>
 
-    <!-- ========== CHANGE DATA CONTENT ========== -->
-    <ScrollView
-        android:id="@+id/change_data_content"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:fillViewport="true"
-        android:visibility="gone"
-        android:background="@color/bg_dark">
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="20dp">
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Данные устройства"
-                android:textColor="@color/text_primary"
-                android:textSize="22sp"
-                android:textStyle="bold"
-                android:layout_marginBottom="24dp" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Имя устройства"
-                android:textColor="@color/text_secondary"
-                android:textSize="13sp"
-                android:layout_marginBottom="6dp" />
-
-            <EditText
-                android:id="@+id/deviceNameChange"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:minHeight="52dp"
-                android:hint="@string/deviceName"
-                android:textColorHint="@color/text_hint"
-                android:textColor="@color/text_primary"
-                android:background="@drawable/input_background"
-                android:paddingStart="16dp"
-                android:paddingEnd="16dp"
-                android:paddingTop="12dp"
-                android:paddingBottom="12dp"
-                android:layout_marginBottom="16dp" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Пароль"
-                android:textColor="@color/text_secondary"
-                android:textSize="13sp"
-                android:layout_marginBottom="6dp" />
-
-            <EditText
-                android:id="@+id/passwordChange"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:hint="@string/devicePassword"
-                android:textColorHint="@color/text_hint"
-                android:textColor="@color/text_primary"
-                android:inputType="textPassword"
-                android:minHeight="52dp"
-                android:background="@drawable/input_background"
-                android:paddingStart="16dp"
-                android:paddingEnd="16dp"
-                android:paddingTop="12dp"
-                android:paddingBottom="12dp"
-                android:layout_marginBottom="24dp" />
-
-            <Button
-                android:id="@+id/change_data"
-                android:layout_width="match_parent"
-                android:layout_height="52dp"
-                android:text="Сохранить"
-                android:textColor="@color/text_primary"
-                android:textSize="16sp"
-                android:background="@drawable/button_background" />
-
-        </LinearLayout>
-    </ScrollView>
-
-    <!-- ========== DEVICES CONTENT ========== -->
-    <ScrollView
-        android:id="@+id/devices_content"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:fillViewport="true"
-        android:visibility="gone"
-        android:background="@color/bg_dark">
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="20dp">
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Устройства"
-                android:textColor="@color/text_primary"
-                android:textSize="22sp"
-                android:textStyle="bold"
-                android:layout_marginBottom="16dp" />
-
-            <Button
-                android:id="@+id/btn_connect_device"
-                android:layout_width="match_parent"
-                android:layout_height="52dp"
-                android:text="Подключить устройство"
-                android:textColor="@color/text_primary"
-                android:background="@drawable/button_background"
-                android:layout_marginBottom="24dp" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Устройства аккаунта"
-                android:textColor="@color/text_secondary"
-                android:textSize="14sp"
-                android:textStyle="bold"
-                android:layout_marginBottom="8dp" />
-
-            <LinearLayout
-                android:id="@+id/account_devices_container"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:layout_marginBottom="24dp" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Подключённые устройства"
-                android:textColor="@color/text_secondary"
-                android:textSize="14sp"
-                android:textStyle="bold"
-                android:layout_marginBottom="8dp" />
-
-            <LinearLayout
-                android:id="@+id/connected_devices_container"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical" />
-
-        </LinearLayout>
-    </ScrollView>
-
     <!-- ========== SETTINGS CONTENT ========== -->
     <ScrollView
         android:id="@+id/settings_content"
@@ -581,7 +405,32 @@
                 android:spinnerMode="dropdown"
                 android:background="@drawable/input_background"
                 android:paddingStart="12dp"
-                android:popupBackground="@color/bg_surface" />
+                android:popupBackground="@color/bg_surface"
+                android:layout_marginBottom="20dp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Имя устройства в сети"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp"
+                android:layout_marginBottom="8dp" />
+
+            <EditText
+                android:id="@+id/et_device_name"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="52dp"
+                android:hint="Например: Телефон, Pixel"
+                android:textColorHint="@color/text_hint"
+                android:textColor="@color/text_primary"
+                android:background="@drawable/input_background"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:paddingTop="12dp"
+                android:paddingBottom="12dp"
+                android:singleLine="true"
+                android:layout_marginBottom="24dp" />
 
             <Button
                 android:id="@+id/save_bot_voice_btn"
@@ -590,8 +439,7 @@
                 android:text="Сохранить настройки"
                 android:textColor="@color/text_primary"
                 android:textSize="16sp"
-                android:background="@drawable/button_background"
-                android:layout_marginTop="20dp" />
+                android:background="@drawable/button_background" />
 
         </LinearLayout>
     </ScrollView>
@@ -602,7 +450,7 @@
         android:layout_height="56dp"
         android:orientation="horizontal"
         android:background="@drawable/nav_background"
-        android:weightSum="4">
+        android:weightSum="2">
 
         <LinearLayout
             android:id="@+id/nav_main"
@@ -627,63 +475,7 @@
                 android:layout_height="wrap_content"
                 android:text="@string/main"
                 android:textColor="@color/nav_selected"
-                android:textSize="10sp"
-                android:textStyle="bold"
-                android:layout_marginTop="2dp" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:id="@+id/nav_data"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:orientation="vertical"
-            android:gravity="center"
-            android:clickable="true"
-            android:focusable="true"
-            android:background="?android:attr/selectableItemBackground">
-            <ImageView
-                android:id="@+id/data_window_btn_icon"
-                android:layout_width="20dp"
-                android:layout_height="20dp"
-                android:src="@android:drawable/ic_menu_edit"
-                android:tint="@color/nav_unselected"
-                android:contentDescription="Устройство" />
-            <TextView
-                android:id="@+id/data_window_btn"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/change_data"
-                android:textColor="@color/nav_unselected"
-                android:textSize="10sp"
-                android:textStyle="bold"
-                android:layout_marginTop="2dp" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:id="@+id/nav_devices"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:orientation="vertical"
-            android:gravity="center"
-            android:clickable="true"
-            android:focusable="true"
-            android:background="?android:attr/selectableItemBackground">
-            <ImageView
-                android:id="@+id/devices_btn_icon"
-                android:layout_width="20dp"
-                android:layout_height="20dp"
-                android:src="@android:drawable/stat_sys_phone_call"
-                android:tint="@color/nav_unselected"
-                android:contentDescription="Связь" />
-            <TextView
-                android:id="@+id/devices_btn"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/devices"
-                android:textColor="@color/nav_unselected"
-                android:textSize="10sp"
+                android:textSize="11sp"
                 android:textStyle="bold"
                 android:layout_marginTop="2dp" />
         </LinearLayout>
@@ -711,7 +503,7 @@
                 android:layout_height="wrap_content"
                 android:text="@string/settings"
                 android:textColor="@color/nav_unselected"
-                android:textSize="10sp"
+                android:textSize="11sp"
                 android:textStyle="bold"
                 android:layout_marginTop="2dp" />
         </LinearLayout>
