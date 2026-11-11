@@ -7,10 +7,11 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
-import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioManager;
@@ -20,6 +21,8 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.provider.AlarmClock;
+import android.provider.MediaStore;
 import android.provider.Settings;
 import android.util.Base64;
 import android.util.Log;
@@ -33,12 +36,9 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
-
-import android.app.usage.UsageStats;
-import android.app.usage.UsageStatsManager;
-import android.content.pm.ApplicationInfo;
 
 public class MyForegroundService extends Service {
     private static final int NOTIFICATION_ID = 123;
@@ -128,19 +128,20 @@ public class MyForegroundService extends Service {
                         if (actions.length() > 0) {
                             FridayActivity activity = FridayActivity.getInstance();
                             if (activity != null) {
-                                activity.runOnUiThread(() -> activity.resetCurrentBotResponse());
+                                activity.runOnUiThread(activity::resetCurrentBotResponse);
                             }
                             for (int i = 0; i < actions.length(); i++) {
                                 JSONObject actionObj = actions.getJSONObject(i);
                                 String actionType = actionObj.optString("action_type", "").toLowerCase();
-                                String actionValue = actionObj.optString("action_value", "").toLowerCase();
-                                
+                                String actionValue = actionObj.optString("action_value", "");
+
                                 if (actionType.equals("data_request")) {
                                     needsDataResponse = true;
-                                    if (actionValue.contains("process") || actionValue.contains("процесс")) needProcesses = true;
-                                    if (actionValue.contains("program") || actionValue.contains("app") || actionValue.contains("прилож")) needPrograms = true;
+                                    String valLower = actionValue.toLowerCase();
+                                    if (valLower.contains("process") || valLower.contains("процесс")) needProcesses = true;
+                                    if (valLower.contains("program") || valLower.contains("app") || valLower.contains("прилож")) needPrograms = true;
                                 } else {
-                                    processAction(actionType, actionObj.optString("action_value", ""));
+                                    processAction(actionType, actionValue);
                                 }
                             }
                         }
@@ -150,21 +151,21 @@ public class MyForegroundService extends Service {
                     if (needsDataResponse) {
                         JSONArray programs = new JSONArray();
                         JSONArray runningApps = new JSONArray();
-                        
+
                         if (needProcesses) runningApps = getRunningAppsWithTitles();
                         if (needPrograms) programs = getInstalledPackages();
-                        
+
                         JSONObject response = new JSONObject();
                         response.put("command_to_device", originalCommand);
                         response.put("processes", runningApps.toString());
                         response.put("programs", programs);
                         response.put("source_name", sourceDevice);
                         response.put("user_msg_id", userMsgId);
-                        
+
                         FridayActivity activity = FridayActivity.getInstance();
                         if (activity != null) {
                             activity.sendEncodedMessage(response);
-                            activity.runOnUiThread(() -> activity.resetCurrentBotResponse());
+                            activity.runOnUiThread(activity::resetCurrentBotResponse);
                         }
                     }
                 }
@@ -176,10 +177,10 @@ public class MyForegroundService extends Service {
     }
 
     // --- ЛОГИКА ПОТОКОВОГО ВОСПРОИЗВЕДЕНИЯ ---
-    
+
     private void appendAudioChunk(String base64Audio) {
         if (base64Audio == null || base64Audio.isEmpty()) return;
-        
+
         byte[] pcmData = Base64.decode(base64Audio, Base64.DEFAULT);
         audioQueue.add(pcmData);
 
@@ -210,7 +211,7 @@ public class MyForegroundService extends Service {
                                     .setSampleRate(sampleRate)
                                     .setChannelMask(channelConfig)
                                     .build())
-                            .setBufferSizeInBytes(bufferSize * 4) 
+                            .setBufferSizeInBytes(bufferSize * 4)
                             .setTransferMode(AudioTrack.MODE_STREAM)
                             .build();
                 } else {
@@ -231,8 +232,8 @@ public class MyForegroundService extends Service {
                         audioTrack.write(chunk, 0, chunk.length);
                     } else {
                         emptyPolls++;
-                        try { Thread.sleep(50); } catch (Exception e) {}
-                        
+                        try { Thread.sleep(50); } catch (Exception ignored) {}
+
                         // Если новых чанков нет больше ~500мс -> Конец стрима по сети
                         if (emptyPolls > 10) {
                             break;
@@ -240,10 +241,9 @@ public class MyForegroundService extends Service {
                     }
                 }
 
-                // КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Ждем, пока буфер доиграет
                 if (audioTrack != null && audioTrack.getState() != AudioTrack.STATE_UNINITIALIZED) {
-                    audioTrack.stop(); // Сообщаем треку, что новых данных не будет, пусть доиграет остатки
-                    Thread.sleep(1000); // Даем ему секунду на воспроизведение последних байтов
+                    audioTrack.stop();
+                    Thread.sleep(1000);
                 }
 
             } catch (Exception e) {
@@ -264,7 +264,7 @@ public class MyForegroundService extends Service {
             try {
                 audioTrack.stop();
                 audioTrack.release();
-            } catch (Exception e) {}
+            } catch (Exception ignored) {}
             audioTrack = null;
         }
     }
@@ -287,27 +287,39 @@ public class MyForegroundService extends Service {
             case "data_request":
                 break;
             case "открытие ссылки":
+            case "ссылка":
+            case "открыть ссылку":
                 openLink(actionContent);
                 break;
-            case "открытие файла":
+            case "открытие приложений":
             case "открытие приложения":
-                openAppInBackground(actionContent);
+            case "запуск приложения":
+            case "запуск приложений":
+            case "открытие файла":
+                openApp(actionContent);
                 break;
             case "изменение громкости":
+            case "громкость":
                 changeVolumeInBackground(actionContent);
                 break;
             case "изменение яркости":
+            case "яркость":
                 changeBrightnessInBackground(actionContent);
                 break;
             case "завершение процесса":
-                closeAppByPackageName(actionContent);
+            case "закрытие приложения":
+            case "закрытие приложений":
+            case "завершение приложения":
+            case "закрыть приложение":
+            case "закрыть процесс":
+                closeApp(actionContent);
                 break;
             case "музыка":
                 String mLower = actionContent.toLowerCase();
-                if (mLower.contains("следующ") || mLower.contains("next")) controlMediaPlayback("next");
-                else if (mLower.contains("предыдущ") || mLower.contains("prev")) controlMediaPlayback("previous");
+                if (mLower.contains("следующ") || mLower.contains("next") || mLower.contains("дальше")) controlMediaPlayback("next");
+                else if (mLower.contains("предыдущ") || mLower.contains("prev") || mLower.contains("назад")) controlMediaPlayback("previous");
                 else if (mLower.contains("выключ") || mLower.contains("стоп") || mLower.contains("пауз") || mLower.contains("pause")) controlMediaPlayback("pause");
-                else if (mLower.contains("включ") || mLower.contains("игра") || mLower.contains("play")) controlMediaPlayback("play");
+                else if (mLower.contains("включ") || mLower.contains("игра") || mLower.contains("play") || mLower.contains("продолж")) controlMediaPlayback("play");
                 break;
             case "очистка истории":
             case "очистить историю":
@@ -360,41 +372,316 @@ public class MyForegroundService extends Service {
         }
     }
 
-    public void closeAppByPackageName(String packageName) {
+    // --- УМНЫЙ ЗАПУСК ПРИЛОЖЕНИЙ ---
+
+    public void openApp(String appQuery) {
+        if (appQuery == null || appQuery.trim().isEmpty()) {
+            showToast("Не указано приложение для запуска");
+            return;
+        }
+
+        String query = appQuery.trim();
+        // Если пришло в формате "Название (com.package.name)" -> извлекаем package name
+        if (query.contains("(") && query.endsWith(")")) {
+            int openIdx = query.lastIndexOf("(");
+            int closeIdx = query.lastIndexOf(")");
+            if (openIdx < closeIdx) {
+                String potentialPkg = query.substring(openIdx + 1, closeIdx).trim();
+                if (launchPackage(potentialPkg)) {
+                    return;
+                }
+                query = query.substring(0, openIdx).trim();
+            }
+        }
+
+        // 1. Попытка запустить напрямую как имя пакета
+        if (launchPackage(query)) {
+            return;
+        }
+
+        // 2. Умный поиск среди всех установленных приложений с лаунчером
+        PackageManager pm = getPackageManager();
+        Intent mainIntent = new Intent(Intent.ACTION_MAIN, null);
+        mainIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+        List<ResolveInfo> launchables = pm.queryIntentActivities(mainIntent, 0);
+
+        String cleanQuery = query.toLowerCase().replaceAll("[^a-zA-Zа-яА-Я0-9]", "");
+
+        ResolveInfo bestMatch = null;
+        int bestScore = 0;
+
+        for (ResolveInfo ri : launchables) {
+            String label = ri.loadLabel(pm).toString();
+            String pkg = ri.activityInfo.packageName;
+            String cleanLabel = label.toLowerCase().replaceAll("[^a-zA-Zа-яА-Я0-9]", "");
+            String cleanPkg = pkg.toLowerCase();
+
+            // Точное совпадение по имени или пакету
+            if (label.equalsIgnoreCase(query) || pkg.equalsIgnoreCase(query) || cleanLabel.equals(cleanQuery)) {
+                bestMatch = ri;
+                bestScore = 100;
+                break;
+            }
+
+            // Пакет содержит запрос (например "telegram" в "org.telegram.messenger")
+            if (cleanPkg.contains(cleanQuery) && bestScore < 80) {
+                bestMatch = ri;
+                bestScore = 80;
+            }
+
+            // Имя начинается с запроса
+            if (cleanLabel.startsWith(cleanQuery) && bestScore < 70) {
+                bestMatch = ri;
+                bestScore = 70;
+            }
+
+            // Имя содержит запрос
+            if (cleanLabel.contains(cleanQuery) && bestScore < 60) {
+                bestMatch = ri;
+                bestScore = 60;
+            }
+
+            // Запрос содержит имя (например, "открой телеграм" -> "телеграм")
+            if (cleanQuery.contains(cleanLabel) && cleanLabel.length() > 2 && bestScore < 50) {
+                bestMatch = ri;
+                bestScore = 50;
+            }
+
+            // Проверка по словарю синонимов / алиасов
+            if (checkAliasMatch(cleanQuery, cleanLabel, cleanPkg) && bestScore < 75) {
+                bestMatch = ri;
+                bestScore = 75;
+            }
+        }
+
+        if (bestMatch != null) {
+            String targetPkg = bestMatch.activityInfo.packageName;
+            String targetLabel = bestMatch.loadLabel(pm).toString();
+            if (launchPackage(targetPkg)) {
+                showToast("Открыто: " + targetLabel);
+                return;
+            }
+        }
+
+        // 3. Fallback: стандартные системные Intent (камера, калькулятор, часы, настройки, браузер)
+        if (launchStandardIntent(query)) {
+            return;
+        }
+
+        // 4. Fallback: поиск по всем ApplicationInfo (включая системные без CATEGORY_LAUNCHER)
+        try {
+            List<ApplicationInfo> apps = pm.getInstalledApplications(0);
+            for (ApplicationInfo ai : apps) {
+                String label = pm.getApplicationLabel(ai).toString();
+                if (label.equalsIgnoreCase(query) || ai.packageName.equalsIgnoreCase(query)) {
+                    if (launchPackage(ai.packageName)) {
+                        showToast("Открыто: " + label);
+                        return;
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+
+        showToast("Приложение \"" + query + "\" не найдено");
+    }
+
+    private boolean launchPackage(String packageName) {
+        if (packageName == null || packageName.trim().isEmpty()) return false;
+        try {
+            PackageManager pm = getPackageManager();
+            Intent launchIntent = pm.getLaunchIntentForPackage(packageName.trim());
+            if (launchIntent != null) {
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+                startActivity(launchIntent);
+                return true;
+            }
+        } catch (Exception e) {
+            Log.e("LaunchPackage", "Error launching " + packageName, e);
+        }
+        return false;
+    }
+
+    private boolean checkAliasMatch(String cleanQuery, String cleanLabel, String cleanPkg) {
+        if (cleanQuery.contains("ютуб") || cleanQuery.contains("youtube")) {
+            return cleanPkg.contains("youtube") || cleanLabel.contains("youtube");
+        }
+        if (cleanQuery.contains("телег") || cleanQuery.contains("telegram")) {
+            return cleanPkg.contains("telegram") || cleanLabel.contains("telegram");
+        }
+        if (cleanQuery.contains("хром") || cleanQuery.contains("chrome") || cleanQuery.contains("браузер") || cleanQuery.contains("browser")) {
+            return cleanPkg.contains("chrome") || cleanPkg.contains("browser") || cleanLabel.contains("chrome");
+        }
+        if (cleanQuery.contains("ватсап") || cleanQuery.contains("вацап") || cleanQuery.contains("whatsapp")) {
+            return cleanPkg.contains("whatsapp");
+        }
+        if (cleanQuery.contains("вк") || cleanQuery.contains("вконтакте") || cleanQuery.contains("vk")) {
+            return cleanPkg.contains("vkontakte") || cleanLabel.contains("vk");
+        }
+        if (cleanQuery.contains("камер") || cleanQuery.contains("camera")) {
+            return cleanPkg.contains("camera") || cleanLabel.contains("камер");
+        }
+        if (cleanQuery.contains("калькулят") || cleanQuery.contains("calculator")) {
+            return cleanPkg.contains("calculator") || cleanLabel.contains("калькулятор");
+        }
+        if (cleanQuery.contains("настройк") || cleanQuery.contains("settings") || cleanQuery.contains("параметр")) {
+            return cleanPkg.contains("settings") || cleanLabel.contains("настройки");
+        }
+        if (cleanQuery.contains("галере") || cleanQuery.contains("фото") || cleanQuery.contains("gallery") || cleanQuery.contains("photos")) {
+            return cleanPkg.contains("gallery") || cleanPkg.contains("photos") || cleanLabel.contains("галерея") || cleanLabel.contains("фото");
+        }
+        if (cleanQuery.contains("час") || cleanQuery.contains("будильник") || cleanQuery.contains("clock") || cleanQuery.contains("alarm")) {
+            return cleanPkg.contains("clock") || cleanLabel.contains("часы") || cleanLabel.contains("будильник");
+        }
+        if (cleanQuery.contains("музык") || cleanQuery.contains("music") || cleanQuery.contains("плеер")) {
+            return cleanPkg.contains("music") || cleanLabel.contains("музыка");
+        }
+        if (cleanQuery.contains("карт") || cleanQuery.contains("maps") || cleanQuery.contains("навигатор")) {
+            return cleanPkg.contains("maps") || cleanPkg.contains("yandexnavi") || cleanLabel.contains("карты");
+        }
+        if (cleanQuery.contains("контакт") || cleanQuery.contains("contacts")) {
+            return cleanPkg.contains("contacts") || cleanLabel.contains("контакты");
+        }
+        if (cleanQuery.contains("телефон") || cleanQuery.contains("звонк") || cleanQuery.contains("dialer") || cleanQuery.contains("phone")) {
+            return cleanPkg.contains("dialer") || cleanPkg.contains("phone") || cleanLabel.contains("телефон");
+        }
+        if (cleanQuery.contains("сообщен") || cleanQuery.contains("смс") || cleanQuery.contains("sms") || cleanQuery.contains("messages")) {
+            return cleanPkg.contains("messaging") || cleanPkg.contains("messages") || cleanLabel.contains("сообщения");
+        }
+        return false;
+    }
+
+    private boolean launchStandardIntent(String query) {
+        String q = query.toLowerCase();
+        try {
+            Intent intent = null;
+            if (q.contains("камер") || q.contains("camera")) {
+                intent = new Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA);
+            } else if (q.contains("настройк") || q.contains("settings")) {
+                intent = new Intent(Settings.ACTION_SETTINGS);
+            } else if (q.contains("будильник") || q.contains("alarm")) {
+                intent = new Intent(AlarmClock.ACTION_SHOW_ALARMS);
+            } else if (q.contains("браузер") || q.contains("интернет") || q.contains("гугл")) {
+                intent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://google.com"));
+            } else if (q.contains("калькулят") || q.contains("calc")) {
+                intent = new Intent();
+                intent.setAction(Intent.ACTION_MAIN);
+                intent.addCategory(Intent.CATEGORY_APP_CALCULATOR);
+            } else if (q.contains("карт") || q.contains("maps")) {
+                intent = new Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0"));
+            }
+
+            if (intent != null) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                if (intent.resolveActivity(getPackageManager()) != null) {
+                    startActivity(intent);
+                    showToast("Приложение открыто");
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            Log.e("StandardIntent", "Error launching standard intent", e);
+        }
+        return false;
+    }
+
+    // --- УМНОЕ ЗАКРЫТИЕ ПРИЛОЖЕНИЙ ---
+
+    public void closeApp(String appQuery) {
+        if (appQuery == null || appQuery.trim().isEmpty()) {
+            showToast("Не указано приложение для закрытия");
+            return;
+        }
+
+        String query = appQuery.trim();
+        // Если пришло "Название (com.pkg.name)"
+        if (query.contains("(") && query.endsWith(")")) {
+            int openIdx = query.lastIndexOf("(");
+            int closeIdx = query.lastIndexOf(")");
+            if (openIdx < closeIdx) {
+                query = query.substring(openIdx + 1, closeIdx).trim();
+            }
+        }
+
+        String targetPackage = query;
+        String displayTitle = query;
+        PackageManager pm = getPackageManager();
+
+        // Проверяем, является ли query известным package
+        try {
+            ApplicationInfo ai = pm.getApplicationInfo(query, 0);
+            displayTitle = pm.getApplicationLabel(ai).toString();
+        } catch (PackageManager.NameNotFoundException e) {
+            // Ищем подходящее приложение по имени
+            Intent mainIntent = new Intent(Intent.ACTION_MAIN, null);
+            mainIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+            List<ResolveInfo> launchables = pm.queryIntentActivities(mainIntent, 0);
+
+            String cleanQuery = query.toLowerCase().replaceAll("[^a-zA-Zа-яА-Я0-9]", "");
+            for (ResolveInfo ri : launchables) {
+                String label = ri.loadLabel(pm).toString();
+                String pkg = ri.activityInfo.packageName;
+                String cleanLabel = label.toLowerCase().replaceAll("[^a-zA-Zа-яА-Я0-9]", "");
+
+                if (label.equalsIgnoreCase(query) || cleanLabel.contains(cleanQuery) || pkg.toLowerCase().contains(cleanQuery) ||
+                        checkAliasMatch(cleanQuery, cleanLabel, pkg.toLowerCase())) {
+                    targetPackage = pkg;
+                    displayTitle = label;
+                    break;
+                }
+            }
+        }
+
+        // Защита системных процессов от закрытия
+        if (isSystemProtectedPackage(targetPackage)) {
+            showToast("Системное приложение " + displayTitle + " защищено от закрытия");
+            return;
+        }
+
         try {
             ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                am.killBackgroundProcesses(packageName);
-                showToast("Приложение " + packageName + " было закрыто");
-                return;
-            }
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && am != null) {
                 List<ActivityManager.AppTask> tasks = am.getAppTasks();
-                for (ActivityManager.AppTask task : tasks) {
-                    ActivityManager.RecentTaskInfo taskInfo = task.getTaskInfo();
-                    if (taskInfo.baseIntent != null && taskInfo.baseIntent.getComponent() != null) {
-                        if (taskInfo.baseIntent.getComponent().getPackageName().equals(packageName)) {
-                            task.finishAndRemoveTask();
-                            showToast("Приложение " + packageName + " было закрыто");
-                            return;
+                if (tasks != null) {
+                    for (ActivityManager.AppTask task : tasks) {
+                        ActivityManager.RecentTaskInfo taskInfo = task.getTaskInfo();
+                        if (taskInfo.baseIntent != null && taskInfo.baseIntent.getComponent() != null) {
+                            if (taskInfo.baseIntent.getComponent().getPackageName().equals(targetPackage)) {
+                                task.finishAndRemoveTask();
+                            }
                         }
                     }
                 }
             }
 
-            Intent intent = new Intent(Intent.ACTION_MAIN);
-            intent.addCategory(Intent.CATEGORY_HOME);
-            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(intent);
+            if (am != null) {
+                am.killBackgroundProcesses(targetPackage);
+            }
 
-            am.killBackgroundProcesses(packageName);
-            showToast("Приложение " + packageName + " было закрыто");
+            // Возвращаем на главный экран, если закрытое приложение было активно
+            Intent homeIntent = new Intent(Intent.ACTION_MAIN);
+            homeIntent.addCategory(Intent.CATEGORY_HOME);
+            homeIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(homeIntent);
 
+            showToast("Приложение " + displayTitle + " закрыто");
         } catch (Exception e) {
-            showToast("Не удалось закрыть приложение " + packageName);
+            Log.e("CloseApp", "Error closing app " + targetPackage, e);
+            showToast("Не удалось закрыть " + displayTitle);
         }
+    }
+
+    private boolean isSystemProtectedPackage(String pkg) {
+        if (pkg == null) return false;
+        String p = pkg.toLowerCase();
+        return p.equals("android") ||
+                p.equals(getPackageName().toLowerCase()) ||
+                p.contains("com.android.systemui") ||
+                p.contains("com.android.launcher") ||
+                p.contains("com.google.android.apps.nexuslauncher") ||
+                p.contains("com.sec.android.app.launcher") ||
+                p.contains("com.miui.home") ||
+                p.contains("com.huawei.android.launcher");
     }
 
     public void showNotificationWithText(String text) {
@@ -419,8 +706,10 @@ public class MyForegroundService extends Service {
                 .setAutoCancel(true);
 
         try {
-            notificationManager.notify(12345, builder.build());
-        } catch (SecurityException e) {}
+            if (notificationManager != null) {
+                notificationManager.notify(12345, builder.build());
+            }
+        } catch (SecurityException ignored) {}
     }
 
     public void openLink(String url) {
@@ -437,7 +726,8 @@ public class MyForegroundService extends Service {
                 startActivity(intent);
             } else {
                 showToast("Не найдено приложение для открытия ссылки");
-                Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("http://www.google.com"));
+                Intent browserIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com"));
+                browserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 if (browserIntent.resolveActivity(pm) != null) startActivity(browserIntent);
             }
         } catch (Exception e) {
@@ -445,65 +735,77 @@ public class MyForegroundService extends Service {
         }
     }
 
-    public void openAppInBackground(String packageName) {
+    public void changeVolumeInBackground(String volumeValue) {
         try {
-            PackageManager pm = getPackageManager();
-            Intent launchIntent = pm.getLaunchIntentForPackage(packageName);
-            if (launchIntent != null) {
-                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(launchIntent);
+            AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            if (audioManager == null || volumeValue == null) return;
+
+            String trimmed = volumeValue.trim();
+            int maxMusic = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+            int currentMusic = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+
+            if (trimmed.toLowerCase().contains("тише") || trimmed.startsWith("-")) {
+                int delta = 10;
+                String digits = trimmed.replaceAll("[^0-9]", "");
+                if (!digits.isEmpty()) delta = Integer.parseInt(digits);
+                int target = Math.max(0, currentMusic - (int) Math.round(maxMusic * (delta / 100.0)));
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, AudioManager.FLAG_SHOW_UI | AudioManager.FLAG_PLAY_SOUND);
                 return;
             }
 
-            Intent settingsIntent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
-            settingsIntent.setData(Uri.parse("package:" + packageName));
-            settingsIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(settingsIntent);
+            if (trimmed.toLowerCase().contains("громче") || trimmed.startsWith("+")) {
+                int delta = 10;
+                String digits = trimmed.replaceAll("[^0-9]", "");
+                if (!digits.isEmpty()) delta = Integer.parseInt(digits);
+                int target = Math.min(maxMusic, currentMusic + (int) Math.round(maxMusic * (delta / 100.0)));
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, AudioManager.FLAG_SHOW_UI | AudioManager.FLAG_PLAY_SOUND);
+                return;
+            }
 
+            String digits = trimmed.replaceAll("[^0-9]", "");
+            if (!digits.isEmpty()) {
+                int percent = Integer.parseInt(digits);
+                percent = Math.max(0, Math.min(100, percent));
+                int targetMusic = (int) Math.round(maxMusic * (percent / 100.0));
+                audioManager.setStreamVolume(
+                        AudioManager.STREAM_MUSIC, targetMusic, AudioManager.FLAG_SHOW_UI | AudioManager.FLAG_PLAY_SOUND
+                );
+            }
         } catch (Exception e) {
-            showToast("Не удалось открыть приложение");
+            Log.e("VolumeControl", "Error changing volume", e);
         }
     }
 
-    public void changeVolumeInBackground(String volumePercent) {
+    public void changeBrightnessInBackground(String brightnessValue) {
         try {
-            AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-            if (audioManager == null) return;
-
-            int percent = Integer.parseInt(volumePercent.replaceAll("[^0-9]", ""));
-            percent = Math.max(0, Math.min(100, percent));
-
-            int maxMusic = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
-            int targetMusic = (int) (maxMusic * (percent / 100.0));
-            audioManager.setStreamVolume(
-                    AudioManager.STREAM_MUSIC, targetMusic, AudioManager.FLAG_SHOW_UI | AudioManager.FLAG_PLAY_SOUND
-            );
-        } catch (Exception e) {}
-    }
-
-    public void changeBrightnessInBackground(String brightnessPercent) {
-        try {
+            if (brightnessValue == null) return;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 if (!Settings.System.canWrite(this)) {
                     Intent intent = new Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS);
                     intent.setData(Uri.parse("package:" + getPackageName()));
                     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                     startActivity(intent);
+                    showToast("Разрешите изменение настроек яркости");
                     return;
                 }
             }
 
-            int percent = Integer.parseInt(brightnessPercent.replace("%", "").trim());
+            String digits = brightnessValue.replaceAll("[^0-9]", "");
+            if (digits.isEmpty()) return;
+            int percent = Integer.parseInt(digits);
             percent = Math.max(0, Math.min(100, percent));
-            int brightness = (int) (255 * percent / 100.0);
+            int brightness = (int) Math.round(255.0 * percent / 100.0);
 
             Settings.System.putInt(getContentResolver(), Settings.System.SCREEN_BRIGHTNESS, brightness);
-        } catch (Exception e) {}
+            showToast("Яркость установлена на " + percent + "%");
+        } catch (Exception e) {
+            Log.e("BrightnessControl", "Error changing brightness", e);
+        }
     }
 
     private void showToast(final String message) {
-        Handler handler = new Handler(Looper.getMainLooper());
-        handler.post(() -> Toast.makeText(getApplicationContext(), message, Toast.LENGTH_SHORT).show());
+        Handler mainHandler = new Handler(Looper.getMainLooper());
+        mainHandler.post(() -> Toast.makeText(getApplicationContext(), message, Toast.LENGTH_SHORT).show());
     }
 
     private Notification createNotification() {
@@ -527,7 +829,9 @@ public class MyForegroundService extends Service {
                     NotificationManager.IMPORTANCE_LOW
             );
             NotificationManager manager = getSystemService(NotificationManager.class);
-            manager.createNotificationChannel(channel);
+            if (manager != null) {
+                manager.createNotificationChannel(channel);
+            }
         }
     }
 
@@ -546,13 +850,32 @@ public class MyForegroundService extends Service {
         JSONArray programs = new JSONArray();
         try {
             PackageManager pm = getPackageManager();
-            List<ApplicationInfo> packages = pm.getInstalledApplications(PackageManager.GET_META_DATA);
-            for (ApplicationInfo packageInfo : packages) {
-                if ((packageInfo.flags & ApplicationInfo.FLAG_SYSTEM) == 0) {
-                    programs.put(packageInfo.packageName);
+            Intent mainIntent = new Intent(Intent.ACTION_MAIN, null);
+            mainIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+            List<ResolveInfo> launchables = pm.queryIntentActivities(mainIntent, 0);
+
+            HashSet<String> added = new HashSet<>();
+            for (ResolveInfo ri : launchables) {
+                String pkg = ri.activityInfo.packageName;
+                if (!added.contains(pkg)) {
+                    added.add(pkg);
+                    String label = ri.loadLabel(pm).toString();
+                    programs.put(label + " (" + pkg + ")");
                 }
             }
-        } catch (Exception e) {}
+
+            // Добавляем также сторонние приложения без лаунчера (сервисы и т.д.)
+            List<ApplicationInfo> packages = pm.getInstalledApplications(0);
+            for (ApplicationInfo packageInfo : packages) {
+                if ((packageInfo.flags & ApplicationInfo.FLAG_SYSTEM) == 0 && !added.contains(packageInfo.packageName)) {
+                    added.add(packageInfo.packageName);
+                    String label = pm.getApplicationLabel(packageInfo).toString();
+                    programs.put(label + " (" + packageInfo.packageName + ")");
+                }
+            }
+        } catch (Exception e) {
+            Log.e("Programs", "Error fetching installed packages", e);
+        }
         return programs;
     }
 
@@ -560,20 +883,54 @@ public class MyForegroundService extends Service {
         JSONArray runningApps = new JSONArray();
         ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
         PackageManager pm = getPackageManager();
+        if (am == null || pm == null) return runningApps;
 
+        HashSet<String> added = new HashSet<>();
+
+        // 1. Через Recent Tasks / AppTasks (Android 5.0+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            try {
+                List<ActivityManager.AppTask> tasks = am.getAppTasks();
+                if (tasks != null) {
+                    for (ActivityManager.AppTask task : tasks) {
+                        ActivityManager.RecentTaskInfo info = task.getTaskInfo();
+                        if (info.baseIntent != null && info.baseIntent.getComponent() != null) {
+                            String pkg = info.baseIntent.getComponent().getPackageName();
+                            if (!added.contains(pkg) && !pkg.equals(getPackageName())) {
+                                added.add(pkg);
+                                try {
+                                    ApplicationInfo appInfo = pm.getApplicationInfo(pkg, 0);
+                                    String appName = pm.getApplicationLabel(appInfo).toString();
+                                    runningApps.put(appName + " (" + pkg + ")");
+                                } catch (PackageManager.NameNotFoundException ignored) {
+                                    runningApps.put(pkg);
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+
+        // 2. Через running processes
         List<ActivityManager.RunningAppProcessInfo> runningProcesses = am.getRunningAppProcesses();
         if (runningProcesses != null) {
             for (ActivityManager.RunningAppProcessInfo processInfo : runningProcesses) {
                 if (processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
                         processInfo.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE) {
-                    for (String pkg : processInfo.pkgList) {
-                        try {
-                            ApplicationInfo appInfo = pm.getApplicationInfo(pkg, 0);
-                            String appName = pm.getApplicationLabel(appInfo).toString();
-                            if ((appInfo.flags & ApplicationInfo.FLAG_SYSTEM) == 0) {
-                                runningApps.put(appName + " (" + pkg + ")");
+                    if (processInfo.pkgList != null) {
+                        for (String pkg : processInfo.pkgList) {
+                            if (!added.contains(pkg) && !pkg.equals(getPackageName())) {
+                                added.add(pkg);
+                                try {
+                                    ApplicationInfo appInfo = pm.getApplicationInfo(pkg, 0);
+                                    String appName = pm.getApplicationLabel(appInfo).toString();
+                                    runningApps.put(appName + " (" + pkg + ")");
+                                } catch (PackageManager.NameNotFoundException ignored) {
+                                    runningApps.put(pkg);
+                                }
                             }
-                        } catch (PackageManager.NameNotFoundException e) {}
+                        }
                     }
                 }
             }

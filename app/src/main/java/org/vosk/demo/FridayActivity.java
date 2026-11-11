@@ -257,7 +257,11 @@ public class FridayActivity extends Activity {
         };
 
         IntentFilter filter = new IntentFilter(MyForegroundService.ACTION_BOT_SPEAKING);
-        registerReceiver(botSpeakingReceiver, filter);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(botSpeakingReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(botSpeakingReceiver, filter);
+        }
 
         openMainWindow();
     }
@@ -1345,8 +1349,17 @@ public class FridayActivity extends Activity {
 
     private void checkAndRequestPermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            List<String> permissions = new ArrayList<>();
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.RECORD_AUDIO}, PERMISSIONS_REQUEST_RECORD_AUDIO);
+                permissions.add(Manifest.permission.RECORD_AUDIO);
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                    permissions.add(Manifest.permission.POST_NOTIFICATIONS);
+                }
+            }
+            if (!permissions.isEmpty()) {
+                ActivityCompat.requestPermissions(this, permissions.toArray(new String[0]), PERMISSIONS_REQUEST_RECORD_AUDIO);
             }
         }
     }
